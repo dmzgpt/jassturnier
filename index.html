@@ -381,6 +381,7 @@
       const [showSpielerScan, setShowSpielerScan] = useState(false);
       const [showAnmeldeScan, setShowAnmeldeScan] = useState(false);
       const [showSignupManager, setShowSignupManager] = useState(false);
+      const [showPrintAnmelde, setShowPrintAnmelde] = useState(false);
       const [signups, setSignups] = useState([]);
 
       useEffect(() => {
@@ -695,6 +696,8 @@
               </button>
               <button onClick={() => setShowAnmeldeScan(true)}
                 className="px-5 py-3 bg-amber-500 text-white rounded-lg font-semibold text-lg min-h-[48px] hover:bg-amber-600 whitespace-nowrap">📸 Scan</button>
+              <button onClick={() => setShowPrintAnmelde(true)}
+                className="px-5 py-3 bg-gray-800 text-white rounded-lg font-semibold text-lg min-h-[48px] hover:bg-gray-900 whitespace-nowrap">🖨️ Liste</button>
               <button onClick={selectAll}
                 className="px-5 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px] hover:bg-gray-300 whitespace-nowrap">Alle</button>
             </div>
@@ -724,6 +727,8 @@
           {showSignupManager && <SignupManagerDialog date={date} allPlayers={activePlayers} selectedPlayers={selectedPlayers}
             onClose={() => setShowSignupManager(false)}
             onApply={(ids) => { setSelectedPlayers(new Set(ids)); setShowSignupManager(false); }} />}
+
+          {showPrintAnmelde && <PrintAnmeldeliste date={date} allPlayers={activePlayers} onClose={() => setShowPrintAnmelde(false)} />}
         </div>
       );
     }
@@ -2267,6 +2272,124 @@ Nur das JSON, nichts anderes.` }
         </div>
       );
       return (<PrintPortal><div className="print-overlay-screen print-overlay"><PrintControls title={`Saisonrangliste — ${season.name}`} onClose={onClose} /><div className="print-only" style={{ display: 'block' }}>{renderTable()}</div><div className="no-print">{renderTable()}</div></div></PrintPortal>);
+    }
+
+    // ════════════════════════════════════════════
+    //  PRINT: ANMELDELISTE (registration sheet)
+    // ════════════════════════════════════════════
+    function PrintAnmeldeliste({ date, allPlayers, onClose }) {
+      const ROWS_PER_PAGE = 20;
+      const BLANK_ROWS = 8; // extra blank rows for walk-ins
+
+      // Sort players: by last name (assuming "Nachname Vorname" or just "Name")
+      const sortedPlayers = useMemo(() => {
+        return [...allPlayers].sort((a, b) => a.name.localeCompare(b.name, 'de'));
+      }, [allPlayers]);
+
+      // Build all rows: pre-filled + blanks
+      const allRows = useMemo(() => {
+        const rows = sortedPlayers.map(p => ({ type: 'player', id: p.id, name: p.name }));
+        for (let i = 0; i < BLANK_ROWS; i++) rows.push({ type: 'blank', id: `blank_${i}`, name: '' });
+        return rows;
+      }, [sortedPlayers]);
+
+      // Split into pages
+      const pages = useMemo(() => {
+        const result = [];
+        for (let i = 0; i < allRows.length; i += ROWS_PER_PAGE) {
+          result.push(allRows.slice(i, i + ROWS_PER_PAGE));
+        }
+        return result;
+      }, [allRows]);
+
+      const dateStr = formatDateLong(date);
+      const B = '1.5px solid #000';
+
+      const renderPage = (pageRows, pageIndex) => (
+        <div style={{ padding: '28px 32px', maxWidth: 700, margin: '0 auto', fontFamily: "'Source Sans 3', Arial, sans-serif", color: '#000' }}>
+          {/* Header — only on first page full, subsequent pages compact */}
+          {pageIndex === 0 ? (
+            <div style={{ textAlign: 'center', marginBottom: 20 }}>
+              <h1 style={{ fontSize: 28, fontWeight: 800, margin: '0 0 4px' }}>Anmeldeliste</h1>
+              <div style={{ fontSize: 22, fontWeight: 700 }}>{dateStr}</div>
+              <div style={{ fontSize: 13, color: '#999', marginTop: 6 }}>{sortedPlayers.length} Spieler · Seite {pageIndex + 1} / {pages.length}</div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 14 }}>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>Anmeldeliste — {dateStr}</div>
+              <div style={{ fontSize: 13, color: '#999' }}>Seite {pageIndex + 1} / {pages.length}</div>
+            </div>
+          )}
+
+          {/* Column headers */}
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th style={{ width: 32, padding: '4px', fontSize: 10, fontWeight: 400, color: '#999', textAlign: 'center', borderBottom: '2px solid #000' }}></th>
+                <th style={{ width: 44, padding: '4px', fontSize: 10, fontWeight: 400, color: '#999', textAlign: 'center', borderBottom: '2px solid #000' }}>Nr.</th>
+                <th style={{ padding: '4px 10px', fontSize: 13, fontWeight: 700, textAlign: 'left', borderBottom: '2px solid #000' }}>Name Vorname</th>
+                <th style={{ width: 48, padding: '4px', fontSize: 10, fontWeight: 400, color: '#999', textAlign: 'center', borderBottom: '2px solid #000' }}>✓</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pageRows.map((row, idx) => {
+                const globalIdx = pageIndex * ROWS_PER_PAGE + idx + 1;
+                const qrText = row.type === 'player' ? `JASS:P:${row.id}` : null;
+                const qrSrc = qrText ? generateQRDataURL(qrText, 1) : null;
+                return (
+                  <tr key={row.id} style={{ borderBottom: B }}>
+                    {/* QR code cell */}
+                    <td style={{ width: 32, padding: '3px', textAlign: 'center', verticalAlign: 'middle', borderRight: B, borderLeft: B }}>
+                      {qrSrc ? <img src={qrSrc} alt="" style={{ width: 28, height: 28, imageRendering: 'pixelated', display: 'block', margin: '0 auto' }} /> : null}
+                    </td>
+                    {/* Row number */}
+                    <td style={{ width: 44, padding: '4px', textAlign: 'center', verticalAlign: 'middle', fontSize: 14, fontWeight: 700, color: '#999', borderRight: B }}>
+                      {globalIdx}
+                    </td>
+                    {/* Name field — large, handwriting-friendly */}
+                    <td style={{ padding: '6px 12px', height: 46, verticalAlign: 'middle', fontSize: 16, borderRight: B }}>
+                      {row.type === 'player' ? (
+                        <span style={{ color: '#bbb', fontSize: 14, letterSpacing: '0.5px' }}>{row.name}</span>
+                      ) : null}
+                    </td>
+                    {/* Checkbox column for ✓ anwesend */}
+                    <td style={{ width: 48, padding: '4px', textAlign: 'center', verticalAlign: 'middle', borderRight: B }}>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+
+          {pageIndex === pages.length - 1 && (
+            <div style={{ marginTop: 16, fontSize: 11, color: '#999', textAlign: 'center' }}>
+              Jass-Turnier-Manager · Leere Zeilen für Nachmeldungen
+            </div>
+          )}
+        </div>
+      );
+
+      return (
+        <PrintPortal>
+          <div className="print-overlay-screen print-overlay">
+            <PrintControls title={`Anmeldeliste — ${dateStr}`} onClose={onClose} />
+            <div className="print-only" style={{ display: 'block' }}>
+              {pages.map((pageRows, i) => (
+                <div key={i} className={i < pages.length - 1 ? 'print-page-break' : ''}>
+                  {renderPage(pageRows, i)}
+                </div>
+              ))}
+            </div>
+            <div className="no-print" style={{ padding: '20px 0' }}>
+              {pages.map((pageRows, i) => (
+                <div key={i} style={{ maxWidth: 700, margin: '0 auto 24px', background: 'white', borderRadius: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
+                  {renderPage(pageRows, i)}
+                </div>
+              ))}
+            </div>
+          </div>
+        </PrintPortal>
+      );
     }
 
     // ════════════════════════════════════════════
