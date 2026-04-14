@@ -73,6 +73,32 @@
   <script type="text/babel">
     const { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } = React;
 
+    // ─── Error Boundary ───
+    class ErrorBoundary extends React.Component {
+      constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+      static getDerivedStateFromError(error) { return { hasError: true, error }; }
+      componentDidCatch(error, errorInfo) { console.error('ErrorBoundary caught:', error, errorInfo); }
+      render() {
+        if (this.state.hasError) {
+          return React.createElement('div', {
+            style: { padding: 32, textAlign: 'center', minHeight: '60vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }
+          },
+            React.createElement('div', { style: { fontSize: 48 } }, '⚠️'),
+            React.createElement('h2', { style: { fontSize: 22, fontWeight: 700, color: '#1F2937' } }, 'Etwas ist schiefgelaufen'),
+            React.createElement('p', { style: { fontSize: 16, color: '#6B7280', maxWidth: 400 } },
+              'Ein unerwarteter Fehler ist aufgetreten. Bitte die Seite neu laden.'),
+            React.createElement('pre', { style: { fontSize: 13, color: '#DC2626', background: '#FEF2F2', padding: 12, borderRadius: 8, maxWidth: 500, overflow: 'auto', textAlign: 'left' } },
+              String(this.state.error)),
+            React.createElement('button', {
+              onClick: () => window.location.reload(),
+              style: { padding: '12px 32px', background: '#2563EB', color: 'white', borderRadius: 8, fontWeight: 700, fontSize: 18, border: 'none', cursor: 'pointer', minHeight: 48 }
+            }, '🔄 Seite neu laden')
+          );
+        }
+        return this.props.children;
+      }
+    }
+
     // ─── Supabase Client ───
     const SUPABASE_URL = 'https://tzdiqzfiafzbgrkzqioj.supabase.co';
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR6ZGlxemZpYWZ6Ymdya3pxaW9qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxNjYwNzgsImV4cCI6MjA5MTc0MjA3OH0.9qNjD12E5GaD1dd_REx0DiaeH5uFac8prboLSuu_2mQ';
@@ -101,6 +127,26 @@
       );
     }
     function useToast() { return useContext(ToastContext); }
+
+    // ─── Shared Players Context ───
+    const PlayersContext = createContext({ allPlayers: [], refreshPlayers: () => {} });
+    function PlayersProvider({ children }) {
+      const [allPlayers, setAllPlayers] = useState([]);
+      const [loaded, setLoaded] = useState(false);
+      const refreshPlayers = useCallback(async () => {
+        const { data } = await supabase.from('players').select('*').order('name');
+        setAllPlayers(data || []);
+        setLoaded(true);
+        return data || [];
+      }, []);
+      useEffect(() => { refreshPlayers(); }, [refreshPlayers]);
+      return (
+        <PlayersContext.Provider value={{ allPlayers, activePlayers: allPlayers.filter(p => p.active), refreshPlayers, loaded }}>
+          {children}
+        </PlayersContext.Provider>
+      );
+    }
+    function usePlayers() { return useContext(PlayersContext); }
 
     // ─── Confirm Dialog ───
     function ConfirmDialog({ open, title, message, onConfirm, onCancel, confirmLabel = 'Ja', cancelLabel = 'Abbrechen', danger = false }) {
@@ -173,6 +219,24 @@
       );
     }
 
+    // ─── Offline Warning ───
+    function OfflineWarning() {
+      const [isOffline, setIsOffline] = useState(!navigator.onLine);
+      useEffect(() => {
+        const goOffline = () => setIsOffline(true);
+        const goOnline = () => setIsOffline(false);
+        window.addEventListener('offline', goOffline);
+        window.addEventListener('online', goOnline);
+        return () => { window.removeEventListener('offline', goOffline); window.removeEventListener('online', goOnline); };
+      }, []);
+      if (!isOffline) return null;
+      return (
+        <div className="fixed bottom-0 left-0 right-0 z-[9999] bg-red-600 text-white text-center py-3 px-4 text-lg font-bold shadow-lg no-print">
+          ⚠️ Keine Internetverbindung — Daten können nicht gespeichert oder geladen werden
+        </div>
+      );
+    }
+
     // ─── Date formatting helper ───
     function formatDateCH(dateStr) {
       return new Date(dateStr + 'T00:00:00').toLocaleDateString('de-CH', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
@@ -186,7 +250,7 @@
     // ════════════════════════════════════════════
     function VerwaltungTab() {
       const toast = useToast();
-      const [players, setPlayers] = useState([]);
+      const { allPlayers: players, refreshPlayers, loaded } = usePlayers();
       const [loading, setLoading] = useState(true);
       const [search, setSearch] = useState('');
       const [showInactive, setShowInactive] = useState(false);
@@ -201,11 +265,9 @@
       const [showApiSection, setShowApiSection] = useState(false);
 
       const loadPlayers = useCallback(async () => {
-        const { data, error } = await supabase.from('players').select('*').order('name');
-        if (error) { toast('Fehler beim Laden der Spieler', 'error'); return; }
-        setPlayers(data || []);
+        await refreshPlayers();
         setLoading(false);
-      }, [toast]);
+      }, [refreshPlayers]);
 
       const loadApiKey = useCallback(async () => {
         const { data } = await supabase.from('settings').select('value').eq('key', 'claude_api_key').single();
@@ -509,7 +571,7 @@
     // ════════════════════════════════════════════
     function TurnierTab({ qrParams, onQrHandled, onSwitchTab }) {
       const toast = useToast();
-      const [players, setPlayers] = useState([]);
+      const { allPlayers: players, activePlayers, refreshPlayers } = usePlayers();
       const [seasons, setSeasons] = useState([]);
       const [tournaments, setTournaments] = useState([]);
       const [loading, setLoading] = useState(true);
@@ -534,12 +596,10 @@
 
       useEffect(() => {
         (async () => {
-          const [pRes, tRes, sRes] = await Promise.all([
-            supabase.from('players').select('*').eq('active', true).order('name'),
-            supabase.from('tournaments').select('*').order('date', { ascending: false }).limit(10),
+          const [tRes, sRes] = await Promise.all([
+            supabase.from('tournaments').select('*').order('date', { ascending: false }).limit(50),
             supabase.from('seasons').select('*').order('start_date', { ascending: false })
           ]);
-          setPlayers(pRes.data || []);
           setTournaments(tRes.data || []);
           setSeasons(sRes.data || []);
 
@@ -551,11 +611,10 @@
             if (qrTournament) {
               const { data: sheets } = await supabase.from('table_sheets').select('*').eq('tournament_id', qrTournament.id);
               const { data: tp } = await supabase.from('tournament_players').select('player_id').eq('tournament_id', qrTournament.id);
-              const { data: allP } = await supabase.from('players').select('*').order('name');
+              await refreshPlayers();
               setActiveTournament(qrTournament);
               setTableSheets(sheets || []);
               if (tp) setSelectedPlayers(new Set(tp.map(x => x.player_id)));
-              if (allP) setPlayers(allP);
               setActiveRound(qrParams.round);
               const existingSheet = (sheets || []).find(s => s.round_number === qrParams.round && s.table_number === qrParams.table);
               setEditingTable({ roundNumber: qrParams.round, tableNumber: qrParams.table, sheet: existingSheet || null });
@@ -577,8 +636,7 @@
         setTableSheets(data || []);
         const { data: tp } = await supabase.from('tournament_players').select('player_id').eq('tournament_id', tournament.id);
         if (tp) setSelectedPlayers(new Set(tp.map(x => x.player_id)));
-        const { data: allP } = await supabase.from('players').select('*').order('name');
-        if (allP) setPlayers(allP);
+        await refreshPlayers();
       };
 
       const createTournament = async () => {
@@ -604,7 +662,6 @@
       };
 
       const selectAll = () => {
-        const activePlayers = players.filter(p => p.active);
         const filteredActive = activePlayers.filter(p => p.name.toLowerCase().includes(playerSearch.toLowerCase()));
         if (filteredActive.every(p => selectedPlayers.has(p.id))) {
           setSelectedPlayers(prev => { const next = new Set(prev); filteredActive.forEach(p => next.delete(p.id)); return next; });
@@ -661,6 +718,19 @@
         return () => supabase.removeChannel(channel);
       }, [activeTournament?.id]);
 
+      // Auto-mark tournament as completed when all 5 rounds are fully verified
+      useEffect(() => {
+        if (!activeTournament || activeTournament.status === 'completed') return;
+        if (tableSheets.length === 0) return;
+        const totalNeeded = activeTournament.table_count * 5;
+        const totalVerified = tableSheets.filter(s => s.verified).length;
+        if (totalVerified === totalNeeded) {
+          supabase.from('tournaments').update({ status: 'completed' }).eq('id', activeTournament.id).then(() => {
+            setActiveTournament(prev => prev ? { ...prev, status: 'completed' } : prev);
+          });
+        }
+      }, [tableSheets, activeTournament?.id, activeTournament?.status, activeTournament?.table_count]);
+
       const [showPrevious, setShowPrevious] = useState(false);
       const previousTournaments = tournaments.filter(t => !activeTournament || t.id !== activeTournament.id);
 
@@ -709,6 +779,28 @@
               onShowRangliste={() => onSwitchTab('rangliste')}
               onPrintRangliste={() => setShowPrintRangliste(true)}
             />
+
+            {/* Fallback: Classic round selector (collapsible) */}
+            <details className="bg-white rounded-xl shadow">
+              <summary className="px-5 py-3 text-base font-semibold text-gray-500 cursor-pointer hover:text-gray-700 select-none">
+                ▸ Runden manuell wählen
+              </summary>
+              <div className="px-5 pb-4 pt-1">
+                <div className="grid grid-cols-5 gap-3">
+                  {[1,2,3,4,5].map(r => {
+                    const status = getRoundStatus(r);
+                    const isActive = activeRound === r;
+                    return (
+                      <button key={r} onClick={() => setActiveRound(r)}
+                        className={`flex flex-col items-center py-4 px-2 rounded-xl border-2 font-bold text-lg min-h-[80px] transition-all ${isActive ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-300' : 'border-gray-200 bg-white hover:border-gray-400'}`}>
+                        <span className="text-2xl mb-1">{roundStatusIcon[status]}</span>
+                        <span>Runde {r}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </details>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <button onClick={() => setShowQuickScan(true)}
@@ -774,7 +866,6 @@
       }
 
       // ─── TOURNAMENT CREATION VIEW ───
-      const activePlayers = players.filter(p => p.active);
       const filteredPlayers = activePlayers.filter(p => p.name.toLowerCase().includes(playerSearch.toLowerCase()));
       const isValid = selectedPlayers.size > 0 && selectedPlayers.size % 4 === 0;
       const tableCount = isValid ? selectedPlayers.size / 4 : 0;
@@ -869,10 +960,7 @@
 
           {showAnmeldeScan && <AnmeldeblattScanDialog allPlayers={activePlayers} onClose={() => setShowAnmeldeScan(false)}
             onApply={(ids) => { setSelectedPlayers(prev => { const next = new Set(prev); ids.forEach(id => next.add(id)); return next; }); setShowAnmeldeScan(false); }}
-            onPlayersChanged={async () => {
-              const { data } = await supabase.from('players').select('*').eq('active', true).order('name');
-              if (data) setPlayers(data);
-            }} />}
+            onPlayersChanged={refreshPlayers} />}
 
           {showSignupManager && <SignupManagerDialog date={date} allPlayers={activePlayers} selectedPlayers={selectedPlayers}
             onClose={() => setShowSignupManager(false)}
@@ -1214,28 +1302,24 @@
     //  TAB 3: RANGLISTE
     // ════════════════════════════════════════════
     function RanglisteTab() {
+      const { allPlayers } = usePlayers();
       const [loading, setLoading] = useState(true);
       const [tournaments, setTournaments] = useState([]);
       const [selectedTournament, setSelectedTournament] = useState(null);
       const [tableSheets, setTableSheets] = useState([]);
-      const [allPlayers, setAllPlayers] = useState([]);
       const [tournamentPlayerIds, setTournamentPlayerIds] = useState([]);
       const [showPrintRangliste, setShowPrintRangliste] = useState(false);
 
       useEffect(() => {
         (async () => {
-          const [tRes, pRes] = await Promise.all([
-            supabase.from('tournaments').select('*').order('date', { ascending: false }).limit(20),
-            supabase.from('players').select('*')
-          ]);
-          setTournaments(tRes.data || []);
-          setAllPlayers(pRes.data || []);
-          if (tRes.data && tRes.data.length > 0) await loadTournamentData(tRes.data[0], pRes.data || []);
+          const { data: tData } = await supabase.from('tournaments').select('*').order('date', { ascending: false }).limit(50);
+          setTournaments(tData || []);
+          if (tData && tData.length > 0) await loadTournamentData(tData[0]);
           setLoading(false);
         })();
       }, []);
 
-      const loadTournamentData = async (t, players) => {
+      const loadTournamentData = async (t) => {
         setSelectedTournament(t);
         const [sRes, tpRes] = await Promise.all([
           supabase.from('table_sheets').select('*').eq('tournament_id', t.id),
@@ -1243,7 +1327,6 @@
         ]);
         setTableSheets(sRes.data || []);
         setTournamentPlayerIds((tpRes.data || []).map(x => x.player_id));
-        if (players) setAllPlayers(players);
       };
 
       const rankings = useMemo(() => {
@@ -1269,7 +1352,7 @@
         <div className="space-y-5">
           <div className="bg-white rounded-xl shadow p-5">
             <label className="block text-lg font-semibold text-gray-700 mb-2">Turnier auswählen</label>
-            <select value={selectedTournament?.id || ''} onChange={e => { const t = tournaments.find(x => x.id === e.target.value); if (t) loadTournamentData(t, allPlayers); }}
+            <select value={selectedTournament?.id || ''} onChange={e => { const t = tournaments.find(x => x.id === e.target.value); if (t) loadTournamentData(t); }}
               className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none bg-white">
               {tournaments.map(t => <option key={t.id} value={t.id}>{formatDateCH(t.date)} — {t.player_count} Spieler</option>)}
             </select>
@@ -1321,10 +1404,10 @@
     // ════════════════════════════════════════════
     function SaisonTab() {
       const toast = useToast();
+      const { allPlayers } = usePlayers();
       const [loading, setLoading] = useState(true);
       const [seasons, setSeasons] = useState([]);
       const [tournaments, setTournaments] = useState([]);
-      const [allPlayers, setAllPlayers] = useState([]);
       const [allSheets, setAllSheets] = useState([]);
       const [selectedSeason, setSelectedSeason] = useState(null);
       const [showCreateSeason, setShowCreateSeason] = useState(false);
@@ -1334,14 +1417,12 @@
       const [showAssign, setShowAssign] = useState(false);
 
       const loadData = useCallback(async () => {
-        const [sRes, tRes, pRes] = await Promise.all([
+        const [sRes, tRes] = await Promise.all([
           supabase.from('seasons').select('*').order('start_date', { ascending: false }),
-          supabase.from('tournaments').select('*').order('date', { ascending: false }),
-          supabase.from('players').select('*')
+          supabase.from('tournaments').select('*').order('date', { ascending: false })
         ]);
         setSeasons(sRes.data || []);
         setTournaments(tRes.data || []);
-        setAllPlayers(pRes.data || []);
         const activeSeason = (sRes.data || []).find(s => s.active);
         if (activeSeason && !selectedSeason) setSelectedSeason(activeSeason);
         setLoading(false);
@@ -2528,7 +2609,7 @@ Nur Zeilen mit einem Namen ODER einem Kreuz aufnehmen. Nur JSON.` }
       }, []);
 
       if (qrParams?.type === 'player') {
-        return (<ToastProvider><PlayerQRView tournamentId={qrParams.tournamentId} playerId={qrParams.playerId} onBack={() => setQrParams(null)} /></ToastProvider>);
+        return (<ToastProvider><ErrorBoundary><PlayerQRView tournamentId={qrParams.tournamentId} playerId={qrParams.playerId} onBack={() => setQrParams(null)} /></ErrorBoundary></ToastProvider>);
       }
 
       const tabs = [
@@ -2560,13 +2641,20 @@ Nur Zeilen mit einem Namen ODER einem Kreuz aufnehmen. Nur JSON.` }
               {tab === 'rangliste' && <RanglisteTab />}
               {tab === 'saison' && <SaisonTab />}
             </main>
-            <footer className="text-center py-6 text-sm text-gray-400">Jass-Turnier-Manager v6.0 · Phase 6</footer>
+            <footer className="text-center py-6 text-sm text-gray-400">Jass-Turnier-Manager v6.1 · Phase 6</footer>
+            <OfflineWarning />
           </div>
         </ToastProvider>
       );
     }
 
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    ReactDOM.createRoot(document.getElementById('root')).render(
+      React.createElement(ErrorBoundary, null,
+        React.createElement(PlayersProvider, null,
+          React.createElement(App)
+        )
+      )
+    );
   </script>
 </body>
 </html>
