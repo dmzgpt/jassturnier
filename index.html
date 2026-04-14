@@ -685,6 +685,7 @@
                 existingSheet={editingTable.sheet}
                 allPlayers={players}
                 tournamentPlayerIds={[...selectedPlayers]}
+                allTableSheets={tableSheets}
                 onClose={() => setEditingTable(null)}
                 onSaved={(sheet) => {
                   setTableSheets(prev => {
@@ -795,7 +796,7 @@
     }
 
     // ─── TABLE SHEET EDITOR ───
-    function TableSheetEditor({ tournament, roundNumber, tableNumber, existingSheet, allPlayers, tournamentPlayerIds, onClose, onSaved }) {
+    function TableSheetEditor({ tournament, roundNumber, tableNumber, existingSheet, allPlayers, tournamentPlayerIds, allTableSheets, onClose, onSaved }) {
       const toast = useToast();
       const [saving, setSaving] = useState(false);
       const [ocrLoading, setOcrLoading] = useState(false);
@@ -884,31 +885,72 @@
         onSaved(result.data);
       };
 
-      // OCR: capture photo and extract scores
+      // OCR: capture photo and extract EVERYTHING (players + scores)
       const handleOCR = async (file) => {
         if (!file) return;
         setOcrError(null);
         setOcrLoading(true);
         try {
-          // Load API key
           const { data: keyData } = await supabase.from('settings').select('value').eq('key', 'claude_api_key').single();
           if (!keyData?.value) throw new Error('Kein API-Key hinterlegt. Bitte unter Verwaltung → Einstellungen speichern.');
 
           const { base64, mediaType } = await fileToBase64(file);
           const imageUrl = URL.createObjectURL(file);
-          const scores = await performOCR(base64, mediaType, keyData.value);
-          setOcrPreview({ scores, imageUrl });
+          const ocrData = await performOCR(base64, mediaType, keyData.value);
+
+          // Match player names against tournament player list
+          const matchResults = {
+            schwarz: ocrData.schwarz.map(name => matchPlayerName(name, tournamentPlayers)),
+            rot: ocrData.rot.map(name => matchPlayerName(name, tournamentPlayers))
+          };
+
+          // Check for duplicate assignments in same round (other tables)
+          const otherSheets = (allTableSheets || []).filter(s =>
+            s.round_number === roundNumber && s.table_number !== tableNumber
+          );
+          const alreadyAssigned = new Set();
+          otherSheets.forEach(s => {
+            [s.schwarz_player1_id, s.schwarz_player2_id, s.rot_player1_id, s.rot_player2_id]
+              .filter(Boolean).forEach(id => alreadyAssigned.add(id));
+          });
+
+          // Flag duplicates
+          const allMatched = [...matchResults.schwarz, ...matchResults.rot];
+          const duplicates = new Set();
+          allMatched.forEach(m => {
+            if (m.player && alreadyAssigned.has(m.player.id)) duplicates.add(m.player.id);
+          });
+
+          // Check OCR round/table vs current context
+          const roundMismatch = ocrData.runde !== null && ocrData.runde !== roundNumber;
+          const tableMismatch = ocrData.tisch !== null && ocrData.tisch !== tableNumber;
+
+          setOcrPreview({
+            imageUrl, ocrData, matchResults, duplicates,
+            roundMismatch, tableMismatch,
+            // Editable matched IDs (user can override)
+            schwarz1Id: matchResults.schwarz[0]?.player?.id || null,
+            schwarz2Id: matchResults.schwarz[1]?.player?.id || null,
+            rot1Id: matchResults.rot[0]?.player?.id || null,
+            rot2Id: matchResults.rot[1]?.player?.id || null,
+          });
         } catch (e) {
           setOcrError(e.message || 'OCR fehlgeschlagen');
         }
         setOcrLoading(false);
       };
 
-      const applyOCRScores = () => {
+      const applyOCRData = () => {
         if (!ocrPreview) return;
-        setGames(ocrPreview.scores.map(s => ({ schwarz: s !== null ? String(s) : '' })));
+        // Apply player assignments
+        if (ocrPreview.schwarz1Id) setSchwarz1(ocrPreview.schwarz1Id);
+        if (ocrPreview.schwarz2Id) setSchwarz2(ocrPreview.schwarz2Id);
+        if (ocrPreview.rot1Id) setRot1(ocrPreview.rot1Id);
+        if (ocrPreview.rot2Id) setRot2(ocrPreview.rot2Id);
+        // Apply scores
+        setGames(ocrPreview.ocrData.punkte.map(s => ({ schwarz: s !== null ? String(s) : '' })));
         setOcrPreview(null);
-        toast('📸 Punkte aus Foto übernommen — bitte kontrollieren!', 'success');
+        toast('📸 Spieler + Punkte aus Foto übernommen — bitte kontrollieren!', 'success');
       };
 
       return (
@@ -996,7 +1038,7 @@
                 <input ref={fileInputRef} type="file" accept="image/*" capture="environment" className="hidden"
                   onChange={e => { if (e.target.files[0]) handleOCR(e.target.files[0]); e.target.value = ''; }} />
 
-                {!ocrLoading && !ocrPreview && (
+                {!ocrLoading && !ocrPreview && !ocrError && (
                   <button onClick={() => fileInputRef.current?.click()}
                     className="w-full py-4 rounded-xl bg-amber-50 border-2 border-amber-300 text-amber-800 font-bold text-lg min-h-[56px] hover:bg-amber-100 transition-all flex items-center justify-center gap-2">
                     📸 Tischzettel fotografieren (OCR)
@@ -1006,13 +1048,13 @@
                 {ocrLoading && (
                   <div className="text-center py-6">
                     <svg className="animate-spin h-8 w-8 text-amber-600 mx-auto mb-3" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
-                    <p className="text-lg text-amber-700 font-semibold">Foto wird analysiert...</p>
-                    <p className="text-sm text-gray-500 mt-1">Claude liest die Punktzahlen ab</p>
+                    <p className="text-lg text-amber-700 font-semibold">Tischzettel wird analysiert...</p>
+                    <p className="text-sm text-gray-500 mt-1">Spieler, Punkte und Tischzuordnung werden erkannt</p>
                   </div>
                 )}
 
                 {ocrError && (
-                  <div className="bg-red-50 border border-red-300 rounded-lg p-4 mt-3">
+                  <div className="bg-red-50 border border-red-300 rounded-lg p-4">
                     <p className="text-red-700 font-semibold">❌ {ocrError}</p>
                     <button onClick={() => { setOcrError(null); fileInputRef.current?.click(); }}
                       className="mt-2 px-4 py-2 bg-red-100 text-red-700 rounded-lg font-semibold text-base min-h-[44px]">
@@ -1021,36 +1063,85 @@
                   </div>
                 )}
 
-                {ocrPreview && (
-                  <div className="space-y-3">
-                    <p className="text-lg font-bold text-gray-800 text-center">📸 Erkannte Punkte — bitte prüfen:</p>
-                    {ocrPreview.imageUrl && (
-                      <img src={ocrPreview.imageUrl} alt="Foto" className="w-full max-h-48 object-contain rounded-lg border" />
-                    )}
-                    <div className="grid grid-cols-[40px_1fr_1fr] gap-2">
-                      <div></div>
-                      <div className="text-center font-bold text-sm text-gray-600">Schwarz</div>
-                      <div className="text-center font-bold text-sm text-red-600">Rot</div>
-                      {ocrPreview.scores.map((s, i) => (
-                        <React.Fragment key={i}>
-                          <span className="text-sm font-bold text-gray-400 text-right">{i+1}.</span>
-                          <div className="text-center font-semibold text-lg bg-gray-50 rounded py-1">{s ?? '?'}</div>
-                          <div className="text-center font-semibold text-lg bg-red-50 rounded py-1 text-red-700">{s !== null ? 157 - s : '?'}</div>
-                        </React.Fragment>
-                      ))}
+                {ocrPreview && (() => {
+                  const { ocrData, matchResults, duplicates, roundMismatch, tableMismatch } = ocrPreview;
+                  const confidenceIcon = (c) => c === 'exact' ? '✅' : c === 'reversed' ? '🔄' : c === 'partial' ? '⚠️' : '❓';
+                  const confidenceLabel = (c) => c === 'exact' ? 'Erkannt' : c === 'reversed' ? 'Name gedreht' : c === 'partial' ? 'Teilmatch' : 'Nicht erkannt';
+
+                  const renderPlayerMatch = (slotKey, ocrName, match, currentId, bgClass) => (
+                    <div className={`${bgClass} rounded-lg p-2 mb-1`}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs text-white opacity-70">{slotKey.replace(/([12])/, ' $1')}</span>
+                        <span className="text-xs text-white">{confidenceIcon(match.confidence)} {confidenceLabel(match.confidence)}</span>
+                      </div>
+                      {ocrName && <div className="text-sm text-white opacity-60 mb-1">OCR: «{ocrName}»</div>}
+                      {match.confidence !== 'none' && match.player ? (
+                        <div className="flex items-center gap-2">
+                          <span className="text-white font-bold flex-1">{match.player.name}</span>
+                          {duplicates.has(match.player.id) && <span className="bg-red-800 text-white text-xs px-2 py-0.5 rounded font-bold">⚠ DOPPELT</span>}
+                        </div>
+                      ) : (
+                        <select value={currentId || ''} onChange={e => setOcrPreview(prev => ({ ...prev, [slotKey + 'Id']: e.target.value || null }))}
+                          className="w-full px-2 py-1.5 rounded text-base font-semibold bg-white text-gray-800">
+                          <option value="">— Manuell wählen —</option>
+                          {tournamentPlayers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                      )}
                     </div>
-                    <div className="flex gap-3">
-                      <button onClick={() => setOcrPreview(null)}
-                        className="flex-1 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px]">
-                        ✕ Verwerfen
-                      </button>
-                      <button onClick={applyOCRScores}
-                        className="flex-1 py-3 bg-green-600 text-white rounded-lg font-bold text-lg min-h-[48px] hover:bg-green-700">
-                        ✅ Übernehmen
-                      </button>
+                  );
+
+                  return (
+                    <div className="space-y-3">
+                      {/* Warnings */}
+                      {(roundMismatch || tableMismatch) && (
+                        <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-amber-800 font-semibold text-base">
+                          ⚠️ {roundMismatch && `Zettel zeigt Runde ${ocrData.runde}, du bist in Runde ${roundNumber}. `}
+                          {tableMismatch && `Zettel zeigt Tisch ${ocrData.tisch}, du bist bei Tisch ${tableNumber}.`}
+                        </div>
+                      )}
+
+                      {ocrPreview.imageUrl && (
+                        <img src={ocrPreview.imageUrl} alt="Foto" className="w-full max-h-36 object-contain rounded-lg border" />
+                      )}
+
+                      {/* Player matches */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <div className="text-center font-bold text-sm text-gray-700 mb-1">Team Schwarz</div>
+                          {renderPlayerMatch('schwarz1', ocrData.schwarz[0], matchResults.schwarz[0], ocrPreview.schwarz1Id, 'bg-gray-700')}
+                          {renderPlayerMatch('schwarz2', ocrData.schwarz[1], matchResults.schwarz[1], ocrPreview.schwarz2Id, 'bg-gray-700')}
+                        </div>
+                        <div>
+                          <div className="text-center font-bold text-sm text-red-700 mb-1">Team Rot</div>
+                          {renderPlayerMatch('rot1', ocrData.rot[0], matchResults.rot[0], ocrPreview.rot1Id, 'bg-red-600')}
+                          {renderPlayerMatch('rot2', ocrData.rot[1], matchResults.rot[1], ocrPreview.rot2Id, 'bg-red-600')}
+                        </div>
+                      </div>
+
+                      {/* Scores preview */}
+                      <div>
+                        <div className="text-sm font-bold text-gray-600 mb-1">Erkannte Punkte:</div>
+                        <div className="grid grid-cols-8 gap-1 text-center text-sm font-semibold">
+                          {ocrData.punkte.map((s, i) => (
+                            <div key={i} className={`py-1 rounded ${s !== null ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-400'}`}>{s ?? '?'}</div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex gap-3">
+                        <button onClick={() => setOcrPreview(null)}
+                          className="flex-1 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px]">
+                          ✕ Verwerfen
+                        </button>
+                        <button onClick={applyOCRData}
+                          className="flex-1 py-3 bg-green-600 text-white rounded-lg font-bold text-lg min-h-[48px] hover:bg-green-700">
+                          ✅ Alles übernehmen
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
               </div>
 
               {/* Actions */}
@@ -1278,17 +1369,24 @@
         },
         body: JSON.stringify({
           model: 'claude-haiku-4-5-20251001',
-          max_tokens: 600,
+          max_tokens: 800,
           messages: [{
             role: 'user',
             content: [
               { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBase64 } },
-              { type: 'text', text: `Dieses Bild zeigt einen ausgefüllten Jass-Tischzettel mit 8 Spielen.
-Jede Zeile hat eine Schwarz-Punktzahl (linke Spalte) und eine Rot-Punktzahl (rechte Spalte). Pro Spiel ergibt Schwarz + Rot immer exakt 157.
-Lese NUR die 8 Schwarz-Punktzahlen (linke Zahlenspalte) von oben nach unten ab.
-Antworte NUR mit einem JSON-Array von genau 8 Zahlen. Beispiel: [85, 102, 45, 130, 67, 90, 112, 25]
-Wenn eine Zeile unleserlich oder leer ist, verwende null.
-Kein anderer Text, nur das JSON-Array.` }
+              { type: 'text', text: `Dieses Bild zeigt einen ausgefüllten Jass-Tischzettel. Lese ALLE Informationen ab.
+
+Antworte NUR mit diesem JSON-Objekt (keine Erklärung, kein Markdown):
+{"runde":null,"tisch":null,"schwarz":["Name1","Name2"],"rot":["Name1","Name2"],"punkte":[0,0,0,0,0,0,0,0]}
+
+Regeln:
+- "runde": Die Rundennummer (Zahl). null falls unleserlich.
+- "tisch": Die Tischnummer (Zahl). null falls unleserlich.
+- "schwarz": Array mit 2 Spielernamen aus der Schwarz-Spalte. Exakt wie geschrieben. null falls unleserlich.
+- "rot": Array mit 2 Spielernamen aus der Rot-Spalte. Exakt wie geschrieben. null falls unleserlich.
+- "punkte": Array mit genau 8 Schwarz-Punktzahlen (linke Zahlenspalte, Spiel 1-8). Pro Spiel gilt: Schwarz + Rot = 157. null falls unleserlich/leer.
+
+Nur das JSON, nichts anderes.` }
             ]
           }]
         })
@@ -1299,18 +1397,78 @@ Kein anderer Text, nur das JSON-Array.` }
       }
       const data = await res.json();
       const text = data.content[0].text.trim();
-      // Extract JSON array from response
-      const match = text.match(/\[[\s\S]*?\]/);
-      if (!match) throw new Error('Konnte keine Zahlen im Bild erkennen');
-      const scores = JSON.parse(match[0]);
-      if (!Array.isArray(scores) || scores.length !== 8) throw new Error(`Erwartet 8 Werte, erhalten: ${scores.length}`);
-      // Validate each score
-      return scores.map(s => {
+      const match = text.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error('Konnte keine Daten im Bild erkennen');
+      const parsed = JSON.parse(match[0]);
+
+      // Validate scores
+      const punkte = (parsed.punkte || []).map(s => {
         if (s === null || s === undefined) return null;
         const n = parseInt(s);
         if (isNaN(n) || n < 0 || n > 157) return null;
         return n;
       });
+      while (punkte.length < 8) punkte.push(null);
+
+      return {
+        runde: parsed.runde != null ? parseInt(parsed.runde) : null,
+        tisch: parsed.tisch != null ? parseInt(parsed.tisch) : null,
+        schwarz: Array.isArray(parsed.schwarz) ? parsed.schwarz : [null, null],
+        rot: Array.isArray(parsed.rot) ? parsed.rot : [null, null],
+        punkte
+      };
+    }
+
+    // ─── Name Matching: OCR name → tournament player ───
+    function normalizeNameParts(name) {
+      if (!name) return [];
+      return name.toLowerCase().replace(/[^a-zäöüéèà\s]/g, '').trim().split(/\s+/).filter(Boolean);
+    }
+
+    function matchPlayerName(ocrName, playersList) {
+      if (!ocrName || !playersList.length) return { player: null, confidence: 'none' };
+      const ocrParts = normalizeNameParts(ocrName);
+      if (ocrParts.length === 0) return { player: null, confidence: 'none' };
+
+      let bestMatch = null;
+      let bestScore = 0;
+      let bestConfidence = 'none';
+
+      for (const p of playersList) {
+        const dbParts = normalizeNameParts(p.name);
+
+        // Exact match (case-insensitive)
+        if (ocrParts.join(' ') === dbParts.join(' ')) {
+          return { player: p, confidence: 'exact' };
+        }
+
+        // Reversed order match ("Hans Bühlmann" ↔ "Bühlmann Hans")
+        if (ocrParts.length >= 2 && dbParts.length >= 2) {
+          const reversed = [...ocrParts].reverse().join(' ');
+          if (reversed === dbParts.join(' ')) {
+            return { player: p, confidence: 'reversed' };
+          }
+        }
+
+        // Partial match: count how many parts overlap
+        let matchCount = 0;
+        for (const op of ocrParts) {
+          for (const dp of dbParts) {
+            if (op === dp || (op.length >= 3 && dp.startsWith(op)) || (dp.length >= 3 && op.startsWith(dp))) {
+              matchCount++;
+              break;
+            }
+          }
+        }
+        const score = matchCount / Math.max(ocrParts.length, dbParts.length);
+        if (score > bestScore) {
+          bestScore = score;
+          bestMatch = p;
+          bestConfidence = score >= 0.5 ? 'partial' : 'none';
+        }
+      }
+
+      return { player: bestConfidence !== 'none' ? bestMatch : null, confidence: bestConfidence };
     }
 
     function fileToBase64(file) {
@@ -1801,7 +1959,7 @@ Kein anderer Text, nur das JSON-Array.` }
 
             {/* Footer */}
             <footer className="text-center py-6 text-sm text-gray-400">
-              Jass-Turnier-Manager v4.0 · Phase 4
+              Jass-Turnier-Manager v4.1 · Phase 4
             </footer>
           </div>
         </ToastProvider>
