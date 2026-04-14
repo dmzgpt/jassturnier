@@ -1,27 +1,1115 @@
 <!DOCTYPE html>
 <html lang="de">
-  <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Jass-Turnier-Manager Mühlenthurnen</title>
-    <style>
-          body { font-family: Arial, sans-serif; text-align: center; padding: 40px; background: #F9FAFB; }
-          h1 { color: #1F2937; font-size: 28px; }
-          .status { background: #D1FAE5; color: #065F46; padding: 16px; border-radius: 8px; margin: 20px auto; max-width: 500px; font-size: 18px; }
-          .info { color: #6B7280; margin-top: 20px; font-size: 14px; }
-        </style>
-  </head>
-  <body>
-      <h1>🃏 Jass-Turnier-Manager</h1>
-    <h2>Mühlenthurnen</h2>
-    <div class="status">✅ Infrastruktur bereit – App wird in Kürze aufgeschaltet</div>div>
-    <div class="info">
-        <p>GitHub Pages: aktiv</p>
-        <p>Supabase: verbunden</p>
-        <p>Version: Platzhalter v0.1</p>
-    </div>div>
-  </body>
-</html>html></p></p></h2></h1>
-  </body>
-    </style></title>
-  </head>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jass-Turnier-Manager</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&display=swap');
+    * { box-sizing: border-box; }
+    body { font-family: 'Source Sans 3', sans-serif; margin: 0; background: #F3F4F6; min-height: 100vh; }
+    input, select, button, textarea { font-family: inherit; }
+    /* Custom scrollbar */
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: #E5E7EB; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb { background: #9CA3AF; border-radius: 4px; }
+    /* Tab indicator animation */
+    .tab-active { border-bottom: 3px solid #2563EB; color: #2563EB; font-weight: 700; }
+    .tab-inactive { border-bottom: 3px solid transparent; color: #6B7280; }
+    .tab-inactive:hover { color: #374151; }
+    /* Score input styling */
+    input[type="number"]::-webkit-inner-spin-button,
+    input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type="number"] { -moz-appearance: textfield; }
+    /* Modal backdrop */
+    .modal-backdrop { background: rgba(0,0,0,0.5); }
+    /* Fade in */
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .fade-in { animation: fadeIn 0.2s ease-out; }
+    /* Toast */
+    @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    .toast-slide { animation: slideIn 0.3s ease-out; }
+  </style>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            schwarz: '#1F2937',
+            rot: '#DC2626',
+            erfolg: '#16A34A',
+            fehler: '#DC2626',
+            warnung: '#D97706',
+            primaer: '#2563EB',
+          },
+          fontSize: {
+            'body': '16px',
+            'input': '20px',
+            'heading': '24px',
+            'xl-heading': '28px',
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } = React;
+
+    // ─── Supabase Client ───
+    const SUPABASE_URL = 'https://tzdiqzfiafzbgrkzqioj.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR6ZGlxemZpYWZ6Ymdya3pxaW9qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxNjYwNzgsImV4cCI6MjA5MTc0MjA3OH0.9qNjD12E5GaD1dd_REx0DiaeH5uFac8prboLSuu_2mQ';
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // ─── Toast Context ───
+    const ToastContext = createContext();
+    function ToastProvider({ children }) {
+      const [toasts, setToasts] = useState([]);
+      const addToast = useCallback((msg, type = 'success') => {
+        const id = Date.now();
+        setToasts(t => [...t, { id, msg, type }]);
+        setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3500);
+      }, []);
+      return (
+        <ToastContext.Provider value={addToast}>
+          {children}
+          <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-2" style={{maxWidth:'400px'}}>
+            {toasts.map(t => (
+              <div key={t.id} className={`toast-slide px-5 py-3 rounded-lg shadow-lg text-white text-lg font-semibold ${t.type === 'error' ? 'bg-red-600' : t.type === 'warning' ? 'bg-amber-500' : 'bg-green-600'}`}>
+                {t.msg}
+              </div>
+            ))}
+          </div>
+        </ToastContext.Provider>
+      );
+    }
+    function useToast() { return useContext(ToastContext); }
+
+    // ─── Confirm Dialog ───
+    function ConfirmDialog({ open, title, message, onConfirm, onCancel, confirmLabel = 'Ja', cancelLabel = 'Abbrechen', danger = false }) {
+      if (!open) return null;
+      return (
+        <div className="fixed inset-0 z-[9000] flex items-center justify-center modal-backdrop" onClick={onCancel}>
+          <div className="bg-white rounded-xl shadow-2xl p-6 m-4 max-w-md w-full fade-in" onClick={e => e.stopPropagation()}>
+            <h3 className="text-xl font-bold text-gray-800 mb-2">{title}</h3>
+            <p className="text-lg text-gray-600 mb-6">{message}</p>
+            <div className="flex gap-3 justify-end">
+              <button onClick={onCancel} className="px-5 py-3 rounded-lg bg-gray-200 text-gray-700 font-semibold text-lg hover:bg-gray-300 min-h-[48px]">{cancelLabel}</button>
+              <button onClick={onConfirm} className={`px-5 py-3 rounded-lg text-white font-semibold text-lg min-h-[48px] ${danger ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'}`}>{confirmLabel}</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Searchable Player Dropdown ───
+    function PlayerDropdown({ players, value, onChange, label, bgClass = 'bg-white', textClass = 'text-gray-900', excludeIds = [] }) {
+      const [open, setOpen] = useState(false);
+      const [search, setSearch] = useState('');
+      const ref = useRef(null);
+      const selected = players.find(p => p.id === value);
+      const filtered = players.filter(p =>
+        !excludeIds.includes(p.id) && p.name.toLowerCase().includes(search.toLowerCase())
+      );
+
+      useEffect(() => {
+        function handleClick(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+        document.addEventListener('mousedown', handleClick);
+        return () => document.removeEventListener('mousedown', handleClick);
+      }, []);
+
+      return (
+        <div ref={ref} className="relative">
+          <label className="block text-sm font-semibold mb-1 text-gray-500">{label}</label>
+          <button
+            type="button"
+            onClick={() => { setOpen(!open); setSearch(''); }}
+            className={`w-full text-left px-4 py-3 rounded-lg border-2 border-gray-300 text-lg font-semibold min-h-[48px] ${bgClass} ${textClass} ${!selected ? 'italic text-gray-400' : ''}`}
+          >
+            {selected ? selected.name : 'Spieler wählen...'}
+          </button>
+          {open && (
+            <div className="absolute z-50 mt-1 w-full bg-white border-2 border-gray-300 rounded-lg shadow-xl max-h-60 overflow-auto fade-in">
+              <div className="sticky top-0 bg-white p-2 border-b">
+                <input
+                  autoFocus
+                  type="text"
+                  placeholder="Suchen..."
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  className="w-full px-3 py-2 border rounded-lg text-lg"
+                />
+              </div>
+              {value && (
+                <button
+                  onClick={() => { onChange(null); setOpen(false); }}
+                  className="w-full text-left px-4 py-3 hover:bg-gray-100 text-gray-400 italic text-lg border-b"
+                >
+                  — Auswahl entfernen —
+                </button>
+              )}
+              {filtered.length === 0 && <div className="px-4 py-3 text-gray-400 text-lg">Kein Spieler gefunden</div>}
+              {filtered.map(p => (
+                <button
+                  key={p.id}
+                  onClick={() => { onChange(p.id); setOpen(false); }}
+                  className={`w-full text-left px-4 py-3 hover:bg-blue-50 text-lg ${p.id === value ? 'bg-blue-100 font-bold' : ''}`}
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ─── Loading Spinner ───
+    function Spinner({ text = 'Laden...' }) {
+      return (
+        <div className="flex items-center justify-center py-12 gap-3">
+          <svg className="animate-spin h-7 w-7 text-blue-600" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
+          <span className="text-lg text-gray-500">{text}</span>
+        </div>
+      );
+    }
+
+    // ════════════════════════════════════════════
+    //  TAB 1: VERWALTUNG
+    // ════════════════════════════════════════════
+    function VerwaltungTab() {
+      const toast = useToast();
+      const [players, setPlayers] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [search, setSearch] = useState('');
+      const [showInactive, setShowInactive] = useState(false);
+      const [editPlayer, setEditPlayer] = useState(null);
+      const [newName, setNewName] = useState('');
+      const [newPhone, setNewPhone] = useState('');
+      const [editName, setEditName] = useState('');
+      const [editPhone, setEditPhone] = useState('');
+      const [deleteConfirm, setDeleteConfirm] = useState(null);
+      const [apiKey, setApiKey] = useState('');
+      const [apiKeySaved, setApiKeySaved] = useState(false);
+      const [showApiSection, setShowApiSection] = useState(false);
+
+      const loadPlayers = useCallback(async () => {
+        const { data, error } = await supabase.from('players').select('*').order('name');
+        if (error) { toast('Fehler beim Laden der Spieler', 'error'); return; }
+        setPlayers(data || []);
+        setLoading(false);
+      }, [toast]);
+
+      const loadApiKey = useCallback(async () => {
+        const { data } = await supabase.from('settings').select('value').eq('key', 'claude_api_key').single();
+        if (data?.value) { setApiKey(data.value); setApiKeySaved(true); }
+      }, []);
+
+      useEffect(() => { loadPlayers(); loadApiKey(); }, [loadPlayers, loadApiKey]);
+
+      const addPlayer = async () => {
+        const name = newName.trim();
+        if (!name) { toast('Bitte Name eingeben', 'warning'); return; }
+        const { error } = await supabase.from('players').insert({ name, phone: newPhone.trim() || null, active: true });
+        if (error) { toast('Fehler: ' + (error.message.includes('unique') ? 'Name existiert bereits' : error.message), 'error'); return; }
+        setNewName(''); setNewPhone('');
+        toast(`${name} hinzugefügt`);
+        loadPlayers();
+      };
+
+      const saveEdit = async () => {
+        const name = editName.trim();
+        if (!name) { toast('Name darf nicht leer sein', 'warning'); return; }
+        const { error } = await supabase.from('players').update({ name, phone: editPhone.trim() || null }).eq('id', editPlayer.id);
+        if (error) { toast('Fehler beim Speichern', 'error'); return; }
+        setEditPlayer(null);
+        toast('Gespeichert');
+        loadPlayers();
+      };
+
+      const toggleActive = async (player) => {
+        const { error } = await supabase.from('players').update({ active: !player.active }).eq('id', player.id);
+        if (error) { toast('Fehler', 'error'); return; }
+        toast(player.active ? `${player.name} deaktiviert` : `${player.name} aktiviert`);
+        loadPlayers();
+      };
+
+      const deletePlayer = async (player) => {
+        const { error } = await supabase.from('players').delete().eq('id', player.id);
+        if (error) { toast('Kann nicht löschen – Spieler ist in Turnieren verwendet', 'error'); return; }
+        setDeleteConfirm(null);
+        toast(`${player.name} gelöscht`);
+        loadPlayers();
+      };
+
+      const saveApiKey = async () => {
+        const { error } = await supabase.from('settings').upsert({ key: 'claude_api_key', value: apiKey });
+        if (error) { toast('Fehler beim Speichern', 'error'); return; }
+        setApiKeySaved(true);
+        toast('API-Key gespeichert');
+      };
+
+      const filtered = players.filter(p => {
+        if (!showInactive && !p.active) return false;
+        if (search && !p.name.toLowerCase().includes(search.toLowerCase())) return false;
+        return true;
+      });
+
+      const activeCount = players.filter(p => p.active).length;
+
+      if (loading) return <Spinner text="Spieler werden geladen..." />;
+
+      return (
+        <div className="space-y-6">
+          {/* Add Player */}
+          <div className="bg-white rounded-xl shadow p-5">
+            <h2 className="text-xl font-bold text-gray-800 mb-4">Neuer Spieler</h2>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <input
+                type="text" placeholder="Name *" value={newName}
+                onChange={e => setNewName(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addPlayer()}
+                className="flex-1 px-4 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none"
+              />
+              <input
+                type="tel" placeholder="Telefon (optional)" value={newPhone}
+                onChange={e => setNewPhone(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addPlayer()}
+                className="sm:w-48 px-4 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none"
+              />
+              <button onClick={addPlayer} className="px-6 py-3 bg-blue-600 text-white rounded-lg font-bold text-lg min-h-[48px] hover:bg-blue-700 whitespace-nowrap">
+                + Hinzufügen
+              </button>
+            </div>
+          </div>
+
+          {/* Player List */}
+          <div className="bg-white rounded-xl shadow p-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+              <h2 className="text-xl font-bold text-gray-800">
+                Spieler <span className="text-gray-400 font-normal">({activeCount} aktiv / {players.length} total)</span>
+              </h2>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} className="w-5 h-5 rounded" />
+                <span className="text-lg text-gray-600">Inaktive zeigen</span>
+              </label>
+            </div>
+            <input
+              type="text" placeholder="🔍 Spieler suchen..." value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg text-lg mb-4 min-h-[48px] focus:border-blue-500 focus:outline-none"
+            />
+            <div className="space-y-2 max-h-[60vh] overflow-y-auto">
+              {filtered.length === 0 && <p className="text-gray-400 text-lg py-4 text-center">Keine Spieler gefunden</p>}
+              {filtered.map(p => (
+                <div key={p.id} className={`flex items-center gap-3 px-4 py-3 rounded-lg border ${p.active ? 'bg-white border-gray-200' : 'bg-gray-100 border-gray-200 opacity-60'}`}>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-lg font-semibold text-gray-800 block truncate">{p.name}</span>
+                    {p.phone && <span className="text-sm text-gray-400">{p.phone}</span>}
+                  </div>
+                  <div className="flex gap-2 flex-shrink-0">
+                    <button onClick={() => { setEditPlayer(p); setEditName(p.name); setEditPhone(p.phone || ''); }}
+                      className="px-3 py-2 bg-gray-200 text-gray-700 rounded-lg font-semibold min-h-[44px] hover:bg-gray-300 text-base">
+                      ✏️
+                    </button>
+                    <button onClick={() => toggleActive(p)}
+                      className={`px-3 py-2 rounded-lg font-semibold min-h-[44px] text-base ${p.active ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'bg-green-100 text-green-700 hover:bg-green-200'}`}>
+                      {p.active ? '⏸' : '▶️'}
+                    </button>
+                    <button onClick={() => setDeleteConfirm(p)}
+                      className="px-3 py-2 bg-red-100 text-red-600 rounded-lg font-semibold min-h-[44px] hover:bg-red-200 text-base">
+                      🗑️
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* API Key */}
+          <div className="bg-white rounded-xl shadow p-5">
+            <button onClick={() => setShowApiSection(!showApiSection)} className="flex items-center gap-2 text-lg font-bold text-gray-800">
+              <span className="text-xl">{showApiSection ? '▾' : '▸'}</span> Einstellungen
+            </button>
+            {showApiSection && (
+              <div className="mt-4 space-y-3">
+                <label className="block text-lg text-gray-600">Claude API-Key</label>
+                <div className="flex gap-3">
+                  <input
+                    type="password" value={apiKey}
+                    onChange={e => { setApiKey(e.target.value); setApiKeySaved(false); }}
+                    placeholder="sk-ant-..."
+                    className="flex-1 px-4 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none font-mono"
+                  />
+                  <button onClick={saveApiKey} className={`px-6 py-3 rounded-lg font-bold text-lg min-h-[48px] text-white ${apiKeySaved ? 'bg-green-600' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                    {apiKeySaved ? '✓ Gespeichert' : 'Speichern'}
+                  </button>
+                </div>
+                <p className="text-sm text-gray-400">Wird für die OCR-Funktion in Phase 4 benötigt.</p>
+              </div>
+            )}
+          </div>
+
+          {/* Edit Modal */}
+          {editPlayer && (
+            <div className="fixed inset-0 z-[9000] flex items-center justify-center modal-backdrop" onClick={() => setEditPlayer(null)}>
+              <div className="bg-white rounded-xl shadow-2xl p-6 m-4 max-w-md w-full fade-in" onClick={e => e.stopPropagation()}>
+                <h3 className="text-xl font-bold text-gray-800 mb-4">Spieler bearbeiten</h3>
+                <div className="space-y-3">
+                  <input type="text" value={editName} onChange={e => setEditName(e.target.value)}
+                    className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none" placeholder="Name" />
+                  <input type="tel" value={editPhone} onChange={e => setEditPhone(e.target.value)}
+                    className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none" placeholder="Telefon" />
+                </div>
+                <div className="flex gap-3 justify-end mt-6">
+                  <button onClick={() => setEditPlayer(null)} className="px-5 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px]">Abbrechen</button>
+                  <button onClick={saveEdit} className="px-5 py-3 bg-blue-600 text-white rounded-lg font-bold text-lg min-h-[48px] hover:bg-blue-700">Speichern</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <ConfirmDialog
+            open={!!deleteConfirm}
+            title="Spieler löschen?"
+            message={`Soll "${deleteConfirm?.name}" wirklich gelöscht werden? Dies kann nicht rückgängig gemacht werden.`}
+            onConfirm={() => deletePlayer(deleteConfirm)}
+            onCancel={() => setDeleteConfirm(null)}
+            confirmLabel="Löschen"
+            danger
+          />
+        </div>
+      );
+    }
+
+    // ════════════════════════════════════════════
+    //  TAB 2: TURNIER-ABEND
+    // ════════════════════════════════════════════
+    function TurnierTab() {
+      const toast = useToast();
+      const [players, setPlayers] = useState([]);
+      const [tournaments, setTournaments] = useState([]);
+      const [loading, setLoading] = useState(true);
+
+      // Tournament creation
+      const [date, setDate] = useState(() => new Date().toISOString().split('T')[0]);
+      const [selectedPlayers, setSelectedPlayers] = useState(new Set());
+      const [playerSearch, setPlayerSearch] = useState('');
+      const [activeTournament, setActiveTournament] = useState(null);
+      const [activeRound, setActiveRound] = useState(null);
+      const [tableSheets, setTableSheets] = useState([]);
+      const [editingTable, setEditingTable] = useState(null);
+
+      // Load data
+      useEffect(() => {
+        (async () => {
+          const [pRes, tRes] = await Promise.all([
+            supabase.from('players').select('*').eq('active', true).order('name'),
+            supabase.from('tournaments').select('*').order('date', { ascending: false }).limit(10)
+          ]);
+          setPlayers(pRes.data || []);
+          setTournaments(tRes.data || []);
+          // Auto-load most recent active tournament
+          const recent = (tRes.data || []).find(t => t.status === 'active');
+          if (recent) loadTournament(recent);
+          setLoading(false);
+        })();
+      }, []);
+
+      const loadTournament = async (tournament) => {
+        setActiveTournament(tournament);
+        const { data } = await supabase.from('table_sheets').select('*').eq('tournament_id', tournament.id);
+        setTableSheets(data || []);
+        // Load tournament players
+        const { data: tp } = await supabase.from('tournament_players').select('player_id').eq('tournament_id', tournament.id);
+        if (tp) setSelectedPlayers(new Set(tp.map(x => x.player_id)));
+        // Also load all players (incl inactive for display)
+        const { data: allP } = await supabase.from('players').select('*').order('name');
+        if (allP) setPlayers(allP);
+      };
+
+      const createTournament = async () => {
+        if (selectedPlayers.size === 0) { toast('Bitte Spieler auswählen', 'warning'); return; }
+        if (selectedPlayers.size % 4 !== 0) { toast(`Spieleranzahl muss durch 4 teilbar sein (aktuell: ${selectedPlayers.size})`, 'error'); return; }
+
+        // Check if date already exists
+        const { data: existing } = await supabase.from('tournaments').select('id').eq('date', date);
+        if (existing && existing.length > 0) { toast('Für dieses Datum existiert bereits ein Turnier', 'error'); return; }
+
+        const tableCount = selectedPlayers.size / 4;
+        const { data: t, error } = await supabase.from('tournaments').insert({
+          date, player_count: selectedPlayers.size, table_count: tableCount, status: 'active'
+        }).select().single();
+        if (error) { toast('Fehler: ' + error.message, 'error'); return; }
+
+        // Insert tournament_players
+        const tpRows = [...selectedPlayers].map(pid => ({ tournament_id: t.id, player_id: pid }));
+        await supabase.from('tournament_players').insert(tpRows);
+
+        toast(`Turnier erstellt: ${tableCount} Tische`);
+        setActiveTournament(t);
+        setTableSheets([]);
+      };
+
+      const togglePlayer = (id) => {
+        setSelectedPlayers(prev => {
+          const next = new Set(prev);
+          next.has(id) ? next.delete(id) : next.add(id);
+          return next;
+        });
+      };
+
+      const selectAll = () => {
+        const activePlayers = players.filter(p => p.active);
+        const filteredActive = activePlayers.filter(p => p.name.toLowerCase().includes(playerSearch.toLowerCase()));
+        if (filteredActive.every(p => selectedPlayers.has(p.id))) {
+          setSelectedPlayers(prev => {
+            const next = new Set(prev);
+            filteredActive.forEach(p => next.delete(p.id));
+            return next;
+          });
+        } else {
+          setSelectedPlayers(prev => {
+            const next = new Set(prev);
+            filteredActive.forEach(p => next.add(p.id));
+            return next;
+          });
+        }
+      };
+
+      // Round status
+      const getRoundStatus = (roundNum) => {
+        if (!activeTournament) return 'empty';
+        const roundSheets = tableSheets.filter(s => s.round_number === roundNum);
+        if (roundSheets.length === 0) return 'empty';
+        const allVerified = roundSheets.length === activeTournament.table_count && roundSheets.every(s => s.verified);
+        if (allVerified) return 'complete';
+        const hasError = roundSheets.some(s => {
+          if (!s.games) return false;
+          const total = s.games.reduce((sum, g) => sum + (g.schwarz || 0) + (157 - (g.schwarz || 0)), 0);
+          return s.games.some(g => g.schwarz !== null && g.schwarz !== undefined && ((g.schwarz) + (157 - g.schwarz)) !== 157);
+        });
+        if (hasError) return 'error';
+        return 'partial';
+      };
+
+      const roundStatusIcon = { empty: '⬜', partial: '🟡', complete: '✅', error: '🔴' };
+      const roundStatusLabel = { empty: 'Leer', partial: 'Teilweise', complete: 'Komplett', error: 'Fehler' };
+
+      // Table display for a round
+      const getTablesForRound = (roundNum) => {
+        if (!activeTournament) return [];
+        const tables = [];
+        for (let t = 1; t <= activeTournament.table_count; t++) {
+          const sheet = tableSheets.find(s => s.round_number === roundNum && s.table_number === t);
+          tables.push({ tableNumber: t, sheet });
+        }
+        return tables;
+      };
+
+      const getTableStatus = (sheet) => {
+        if (!sheet || !sheet.games) return 'empty';
+        const filledGames = sheet.games.filter(g => g.schwarz !== null && g.schwarz !== undefined);
+        if (filledGames.length === 0) return 'empty';
+        if (sheet.verified) return 'complete';
+        if (filledGames.length < 8) return 'partial';
+        const totalSchwarz = filledGames.reduce((s, g) => s + g.schwarz, 0);
+        const totalRot = filledGames.reduce((s, g) => s + (157 - g.schwarz), 0);
+        if (totalSchwarz + totalRot !== 1256) return 'error';
+        return 'complete';
+      };
+
+      const tableStatusBorder = { empty: 'border-gray-300', partial: 'border-amber-400', complete: 'border-green-500', error: 'border-red-500' };
+      const tableStatusBg = { empty: 'bg-gray-50', partial: 'bg-amber-50', complete: 'bg-green-50', error: 'bg-red-50' };
+
+      // Realtime subscription
+      useEffect(() => {
+        if (!activeTournament) return;
+        const channel = supabase
+          .channel('table_sheets_changes')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'table_sheets', filter: `tournament_id=eq.${activeTournament.id}` }, (payload) => {
+            if (payload.eventType === 'INSERT') {
+              setTableSheets(prev => [...prev.filter(s => s.id !== payload.new.id), payload.new]);
+            } else if (payload.eventType === 'UPDATE') {
+              setTableSheets(prev => prev.map(s => s.id === payload.new.id ? payload.new : s));
+            } else if (payload.eventType === 'DELETE') {
+              setTableSheets(prev => prev.filter(s => s.id !== payload.old.id));
+            }
+          })
+          .subscribe();
+        return () => supabase.removeChannel(channel);
+      }, [activeTournament?.id]);
+
+      // Previous tournaments
+      const [showPrevious, setShowPrevious] = useState(false);
+      const previousTournaments = tournaments.filter(t => !activeTournament || t.id !== activeTournament.id);
+
+      if (loading) return <Spinner text="Daten werden geladen..." />;
+
+      // ─── ACTIVE TOURNAMENT VIEW ───
+      if (activeTournament) {
+        return (
+          <div className="space-y-5">
+            {/* Tournament Header */}
+            <div className="bg-white rounded-xl shadow p-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-800">
+                    Turnier {new Date(activeTournament.date + 'T00:00:00').toLocaleDateString('de-CH', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+                  </h2>
+                  <p className="text-lg text-gray-500">{activeTournament.player_count} Spieler · {activeTournament.table_count} Tische</p>
+                </div>
+                <button onClick={() => { setActiveTournament(null); setActiveRound(null); setTableSheets([]); }}
+                  className="px-5 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px] hover:bg-gray-300">
+                  ← Zurück
+                </button>
+              </div>
+            </div>
+
+            {/* Round Buttons */}
+            <div className="bg-white rounded-xl shadow p-5">
+              <h3 className="text-lg font-bold text-gray-700 mb-3">Runden</h3>
+              <div className="grid grid-cols-5 gap-3">
+                {[1,2,3,4,5].map(r => {
+                  const status = getRoundStatus(r);
+                  const isActive = activeRound === r;
+                  return (
+                    <button key={r} onClick={() => setActiveRound(r)}
+                      className={`flex flex-col items-center py-4 px-2 rounded-xl border-2 font-bold text-lg min-h-[80px] transition-all ${isActive ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-300' : 'border-gray-200 bg-white hover:border-gray-400'}`}>
+                      <span className="text-2xl mb-1">{roundStatusIcon[status]}</span>
+                      <span>Runde {r}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Tables for Selected Round */}
+            {activeRound && (
+              <div className="bg-white rounded-xl shadow p-5 fade-in">
+                <h3 className="text-lg font-bold text-gray-700 mb-3">Runde {activeRound} – Tische</h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                  {getTablesForRound(activeRound).map(({ tableNumber, sheet }) => {
+                    const status = getTableStatus(sheet);
+                    return (
+                      <button key={tableNumber}
+                        onClick={() => setEditingTable({ roundNumber: activeRound, tableNumber, sheet })}
+                        className={`flex flex-col items-center py-5 px-3 rounded-xl border-2 ${tableStatusBorder[status]} ${tableStatusBg[status]} font-bold text-lg min-h-[90px] hover:shadow-md transition-all`}>
+                        <span className="text-2xl mb-1">{roundStatusIcon[status]}</span>
+                        <span>Tisch {tableNumber}</span>
+                        {sheet?.total_schwarz != null && (
+                          <span className="text-sm text-gray-500 mt-1">S:{sheet.total_schwarz} R:{sheet.total_rot}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Table Sheet Editor Modal */}
+            {editingTable && (
+              <TableSheetEditor
+                tournament={activeTournament}
+                roundNumber={editingTable.roundNumber}
+                tableNumber={editingTable.tableNumber}
+                existingSheet={editingTable.sheet}
+                allPlayers={players}
+                tournamentPlayerIds={[...selectedPlayers]}
+                onClose={() => setEditingTable(null)}
+                onSaved={(sheet) => {
+                  setTableSheets(prev => {
+                    const without = prev.filter(s => !(s.round_number === sheet.round_number && s.table_number === sheet.table_number));
+                    return [...without, sheet];
+                  });
+                  setEditingTable(null);
+                }}
+              />
+            )}
+          </div>
+        );
+      }
+
+      // ─── TOURNAMENT CREATION VIEW ───
+      const activePlayers = players.filter(p => p.active);
+      const filteredPlayers = activePlayers.filter(p =>
+        p.name.toLowerCase().includes(playerSearch.toLowerCase())
+      );
+      const isValid = selectedPlayers.size > 0 && selectedPlayers.size % 4 === 0;
+      const tableCount = isValid ? selectedPlayers.size / 4 : 0;
+
+      return (
+        <div className="space-y-5">
+          {/* Previous Tournaments */}
+          {previousTournaments.length > 0 && (
+            <div className="bg-white rounded-xl shadow p-5">
+              <button onClick={() => setShowPrevious(!showPrevious)} className="flex items-center gap-2 text-lg font-bold text-gray-800 w-full">
+                <span>{showPrevious ? '▾' : '▸'}</span> Bisherige Turniere ({previousTournaments.length})
+              </button>
+              {showPrevious && (
+                <div className="mt-3 space-y-2">
+                  {previousTournaments.map(t => (
+                    <button key={t.id} onClick={() => loadTournament(t)}
+                      className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 hover:bg-blue-50 flex justify-between items-center min-h-[48px]">
+                      <span className="text-lg font-semibold">
+                        {new Date(t.date + 'T00:00:00').toLocaleDateString('de-CH', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+                      </span>
+                      <span className="text-gray-500">{t.player_count} Spieler · {t.table_count} Tische</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* New Tournament */}
+          <div className="bg-white rounded-xl shadow p-5">
+            <h2 className="text-xl font-bold text-gray-800 mb-4">Neues Turnier erstellen</h2>
+            <div className="mb-4">
+              <label className="block text-lg font-semibold text-gray-700 mb-2">Datum</label>
+              <input type="date" value={date} onChange={e => setDate(e.target.value)}
+                className="px-4 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none" />
+            </div>
+          </div>
+
+          {/* Player Selection */}
+          <div className="bg-white rounded-xl shadow p-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+              <h2 className="text-xl font-bold text-gray-800">Spieler auswählen</h2>
+              <div className="flex items-center gap-4">
+                <span className={`text-lg font-bold ${isValid ? 'text-green-600' : selectedPlayers.size > 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                  {selectedPlayers.size} gewählt
+                  {selectedPlayers.size > 0 && selectedPlayers.size % 4 !== 0 && ` (brauche ${4 - (selectedPlayers.size % 4)} mehr)`}
+                  {isValid && ` → ${tableCount} Tische`}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mb-4">
+              <input type="text" placeholder="🔍 Spieler suchen..." value={playerSearch}
+                onChange={e => setPlayerSearch(e.target.value)}
+                className="flex-1 px-4 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none" />
+              <button onClick={selectAll}
+                className="px-5 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px] hover:bg-gray-300 whitespace-nowrap">
+                Alle auswählen
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-[50vh] overflow-y-auto">
+              {filteredPlayers.map(p => (
+                <button key={p.id} onClick={() => togglePlayer(p.id)}
+                  className={`text-left px-4 py-3 rounded-lg border-2 font-semibold text-lg min-h-[48px] transition-all ${selectedPlayers.has(p.id) ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:border-blue-400'}`}>
+                  {selectedPlayers.has(p.id) ? '✓ ' : ''}{p.name}
+                </button>
+              ))}
+            </div>
+
+            {selectedPlayers.size > 0 && (
+              <div className="mt-5 pt-4 border-t">
+                <button onClick={createTournament} disabled={!isValid}
+                  className={`w-full py-4 rounded-xl font-bold text-xl min-h-[56px] text-white transition-all ${isValid ? 'bg-blue-600 hover:bg-blue-700 shadow-lg' : 'bg-gray-300 cursor-not-allowed'}`}>
+                  {isValid ? `🎯 Turnier starten (${tableCount} Tische)` : `Spieleranzahl muss durch 4 teilbar sein`}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ─── TABLE SHEET EDITOR ───
+    function TableSheetEditor({ tournament, roundNumber, tableNumber, existingSheet, allPlayers, tournamentPlayerIds, onClose, onSaved }) {
+      const toast = useToast();
+      const [saving, setSaving] = useState(false);
+
+      const tournamentPlayers = allPlayers.filter(p => tournamentPlayerIds.includes(p.id)).sort((a,b) => a.name.localeCompare(b.name));
+
+      const [schwarz1, setSchwarz1] = useState(existingSheet?.schwarz_player1_id || null);
+      const [schwarz2, setSchwarz2] = useState(existingSheet?.schwarz_player2_id || null);
+      const [rot1, setRot1] = useState(existingSheet?.rot_player1_id || null);
+      const [rot2, setRot2] = useState(existingSheet?.rot_player2_id || null);
+
+      const emptyGames = () => Array.from({ length: 8 }, () => ({ schwarz: '' }));
+      const [games, setGames] = useState(() => {
+        if (existingSheet?.games) {
+          return existingSheet.games.map(g => ({
+            schwarz: g.schwarz !== null && g.schwarz !== undefined ? String(g.schwarz) : ''
+          }));
+        }
+        return emptyGames();
+      });
+
+      const inputRefs = useRef([]);
+
+      const setGameScore = (idx, val) => {
+        const cleaned = val.replace(/[^0-9]/g, '');
+        const num = cleaned === '' ? '' : Math.min(157, parseInt(cleaned));
+        setGames(prev => prev.map((g, i) => i === idx ? { schwarz: String(num) } : g));
+      };
+
+      const handleKeyDown = (e, idx) => {
+        if (e.key === 'Enter' || e.key === 'Tab') {
+          e.preventDefault();
+          const next = idx + 1;
+          if (next < 8 && inputRefs.current[next]) inputRefs.current[next].focus();
+        }
+      };
+
+      const parsedGames = games.map(g => {
+        const s = g.schwarz === '' ? null : parseInt(g.schwarz);
+        return { schwarz: s, rot: s !== null ? 157 - s : null };
+      });
+
+      const totalSchwarz = parsedGames.reduce((sum, g) => sum + (g.schwarz ?? 0), 0);
+      const totalRot = parsedGames.reduce((sum, g) => sum + (g.rot ?? 0), 0);
+      const filledCount = parsedGames.filter(g => g.schwarz !== null).length;
+      const grandTotal = totalSchwarz + totalRot;
+      const isComplete = filledCount === 8 && grandTotal === 1256;
+
+      const selectedIds = [schwarz1, schwarz2, rot1, rot2].filter(Boolean);
+
+      const saveSheet = async () => {
+        if (!schwarz1 || !schwarz2 || !rot1 || !rot2) { toast('Bitte alle 4 Spieler zuweisen', 'warning'); return; }
+        const uniqueIds = new Set([schwarz1, schwarz2, rot1, rot2]);
+        if (uniqueIds.size !== 4) { toast('Jeder Spieler darf nur einmal vorkommen', 'error'); return; }
+
+        setSaving(true);
+        const gamesData = parsedGames.map(g => ({ schwarz: g.schwarz }));
+        const row = {
+          tournament_id: tournament.id,
+          round_number: roundNumber,
+          table_number: tableNumber,
+          schwarz_player1_id: schwarz1,
+          schwarz_player2_id: schwarz2,
+          rot_player1_id: rot1,
+          rot_player2_id: rot2,
+          games: gamesData,
+          total_schwarz: totalSchwarz,
+          total_rot: totalRot,
+          verified: isComplete,
+          source: 'manual'
+        };
+
+        let result;
+        if (existingSheet?.id) {
+          result = await supabase.from('table_sheets').update(row).eq('id', existingSheet.id).select().single();
+        } else {
+          result = await supabase.from('table_sheets').upsert(row, { onConflict: 'tournament_id,round_number,table_number' }).select().single();
+        }
+
+        setSaving(false);
+        if (result.error) { toast('Fehler beim Speichern: ' + result.error.message, 'error'); return; }
+        toast(isComplete ? '✅ Tischblatt komplett gespeichert' : '💾 Zwischenstand gespeichert');
+        onSaved(result.data);
+      };
+
+      return (
+        <div className="fixed inset-0 z-[9000] flex items-start justify-center modal-backdrop overflow-y-auto py-4" onClick={onClose}>
+          <div className="bg-white rounded-xl shadow-2xl m-4 max-w-lg w-full fade-in" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="px-5 py-4 border-b bg-gray-50 rounded-t-xl flex items-center justify-between">
+              <div>
+                <h3 className="text-xl font-bold text-gray-800">Runde {roundNumber} · Tisch {tableNumber}</h3>
+              </div>
+              <button onClick={onClose} className="text-3xl text-gray-400 hover:text-gray-600 leading-none px-2">×</button>
+            </div>
+
+            <div className="p-5 space-y-5">
+              {/* Player Assignment */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-gray-800 rounded-lg p-3">
+                  <h4 className="text-white font-bold text-lg mb-2 text-center">Team Schwarz</h4>
+                  <div className="space-y-2">
+                    <PlayerDropdown players={tournamentPlayers} value={schwarz1} onChange={setSchwarz1}
+                      label="Spieler 1" bgClass="bg-gray-700" textClass="text-white" excludeIds={selectedIds.filter(id => id !== schwarz1)} />
+                    <PlayerDropdown players={tournamentPlayers} value={schwarz2} onChange={setSchwarz2}
+                      label="Spieler 2" bgClass="bg-gray-700" textClass="text-white" excludeIds={selectedIds.filter(id => id !== schwarz2)} />
+                  </div>
+                </div>
+                <div className="bg-red-600 rounded-lg p-3">
+                  <h4 className="text-white font-bold text-lg mb-2 text-center">Team Rot</h4>
+                  <div className="space-y-2">
+                    <PlayerDropdown players={tournamentPlayers} value={rot1} onChange={setRot1}
+                      label="Spieler 1" bgClass="bg-red-500" textClass="text-white" excludeIds={selectedIds.filter(id => id !== rot1)} />
+                    <PlayerDropdown players={tournamentPlayers} value={rot2} onChange={setRot2}
+                      label="Spieler 2" bgClass="bg-red-500" textClass="text-white" excludeIds={selectedIds.filter(id => id !== rot2)} />
+                  </div>
+                </div>
+              </div>
+
+              {/* Score Entry */}
+              <div>
+                <div className="grid grid-cols-[40px_1fr_1fr] gap-2 mb-2">
+                  <div></div>
+                  <div className="text-center font-bold text-gray-800 bg-gray-200 rounded py-1">Schwarz</div>
+                  <div className="text-center font-bold text-red-700 bg-red-100 rounded py-1">Rot</div>
+                </div>
+                {parsedGames.map((g, idx) => {
+                  const isValid = g.schwarz !== null ? (g.schwarz + g.rot === 157) : true;
+                  const hasValue = g.schwarz !== null;
+                  return (
+                    <div key={idx} className={`grid grid-cols-[40px_1fr_1fr] gap-2 mb-1 items-center`}>
+                      <span className="text-sm font-bold text-gray-400 text-right">{idx + 1}.</span>
+                      <input
+                        ref={el => inputRefs.current[idx] = el}
+                        type="number"
+                        min="0" max="157"
+                        value={games[idx].schwarz}
+                        onChange={e => setGameScore(idx, e.target.value)}
+                        onKeyDown={e => handleKeyDown(e, idx)}
+                        placeholder="0-157"
+                        className={`w-full px-3 py-2 border-2 rounded-lg text-center text-lg font-semibold min-h-[44px] focus:outline-none ${hasValue ? (isValid ? 'border-green-400 bg-green-50' : 'border-red-400 bg-red-50') : 'border-gray-300'}`}
+                      />
+                      <div className={`px-3 py-2 border-2 rounded-lg text-center text-lg font-semibold min-h-[44px] ${hasValue ? (isValid ? 'border-green-400 bg-green-50 text-green-800' : 'border-red-400 bg-red-50 text-red-800') : 'border-gray-200 bg-gray-50 text-gray-400'}`}>
+                        {g.rot !== null ? g.rot : '—'}
+                      </div>
+                    </div>
+                  );
+                })}
+                {/* Total */}
+                <div className="grid grid-cols-[40px_1fr_1fr] gap-2 mt-3 pt-3 border-t-2 border-gray-300">
+                  <span className="text-sm font-bold text-gray-400 text-right">Σ</span>
+                  <div className={`px-3 py-2 rounded-lg text-center text-xl font-bold min-h-[48px] flex items-center justify-center ${isComplete ? 'bg-green-100 text-green-800' : filledCount === 8 ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-600'}`}>
+                    {totalSchwarz}
+                  </div>
+                  <div className={`px-3 py-2 rounded-lg text-center text-xl font-bold min-h-[48px] flex items-center justify-center ${isComplete ? 'bg-green-100 text-green-800' : filledCount === 8 ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-600'}`}>
+                    {totalRot}
+                  </div>
+                </div>
+                <div className="text-center mt-2">
+                  {filledCount === 8 && isComplete && <span className="text-green-600 font-bold text-lg">✅ Total = 1'256 — Korrekt!</span>}
+                  {filledCount === 8 && !isComplete && <span className="text-red-600 font-bold text-lg">❌ Total = {grandTotal} — Muss 1'256 sein!</span>}
+                  {filledCount > 0 && filledCount < 8 && <span className="text-gray-400 text-lg">{filledCount}/8 Spiele eingegeben</span>}
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex gap-3">
+                <button onClick={onClose} className="flex-1 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px] hover:bg-gray-300">
+                  Abbrechen
+                </button>
+                <button onClick={saveSheet} disabled={saving}
+                  className={`flex-1 py-3 rounded-lg font-bold text-lg min-h-[48px] text-white ${saving ? 'bg-gray-400' : isComplete ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                  {saving ? '...' : isComplete ? '✅ Speichern' : '💾 Zwischenspeichern'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ════════════════════════════════════════════
+    //  TAB 3: RANGLISTE
+    // ════════════════════════════════════════════
+    function RanglisteTab() {
+      const [loading, setLoading] = useState(true);
+      const [tournaments, setTournaments] = useState([]);
+      const [selectedTournament, setSelectedTournament] = useState(null);
+      const [tableSheets, setTableSheets] = useState([]);
+      const [allPlayers, setAllPlayers] = useState([]);
+      const [tournamentPlayerIds, setTournamentPlayerIds] = useState([]);
+
+      useEffect(() => {
+        (async () => {
+          const [tRes, pRes] = await Promise.all([
+            supabase.from('tournaments').select('*').order('date', { ascending: false }).limit(20),
+            supabase.from('players').select('*')
+          ]);
+          setTournaments(tRes.data || []);
+          setAllPlayers(pRes.data || []);
+          // Auto-select most recent
+          if (tRes.data && tRes.data.length > 0) {
+            await loadTournamentData(tRes.data[0], pRes.data || []);
+          }
+          setLoading(false);
+        })();
+      }, []);
+
+      const loadTournamentData = async (t, players) => {
+        setSelectedTournament(t);
+        const [sRes, tpRes] = await Promise.all([
+          supabase.from('table_sheets').select('*').eq('tournament_id', t.id),
+          supabase.from('tournament_players').select('player_id').eq('tournament_id', t.id)
+        ]);
+        setTableSheets(sRes.data || []);
+        setTournamentPlayerIds((tpRes.data || []).map(x => x.player_id));
+        if (players) setAllPlayers(players);
+      };
+
+      // Compute rankings
+      const rankings = useMemo(() => {
+        if (!selectedTournament || tableSheets.length === 0) return [];
+        const playerMap = {};
+        allPlayers.forEach(p => { playerMap[p.id] = p.name; });
+
+        const scores = {}; // playerId -> { rounds: { 1: pts, 2: pts, ... }, total: pts }
+
+        // Init all tournament players
+        tournamentPlayerIds.forEach(pid => {
+          scores[pid] = { name: playerMap[pid] || 'Unbekannt', rounds: {}, total: 0 };
+        });
+
+        tableSheets.forEach(sheet => {
+          if (!sheet.games) return;
+          const totalSchwarz = sheet.games.reduce((s, g) => s + (g.schwarz ?? 0), 0);
+          const totalRot = sheet.games.reduce((s, g) => s + (g.schwarz !== null && g.schwarz !== undefined ? 157 - g.schwarz : 0), 0);
+          const round = sheet.round_number;
+
+          // Schwarz players get totalSchwarz
+          [sheet.schwarz_player1_id, sheet.schwarz_player2_id].forEach(pid => {
+            if (pid && scores[pid]) {
+              scores[pid].rounds[round] = (scores[pid].rounds[round] || 0) + totalSchwarz;
+              scores[pid].total += totalSchwarz;
+            }
+          });
+          // Rot players get totalRot
+          [sheet.rot_player1_id, sheet.rot_player2_id].forEach(pid => {
+            if (pid && scores[pid]) {
+              scores[pid].rounds[round] = (scores[pid].rounds[round] || 0) + totalRot;
+              scores[pid].total += totalRot;
+            }
+          });
+        });
+
+        return Object.entries(scores)
+          .map(([id, data]) => ({ id, ...data }))
+          .sort((a, b) => b.total - a.total);
+      }, [selectedTournament, tableSheets, allPlayers, tournamentPlayerIds]);
+
+      if (loading) return <Spinner text="Rangliste wird berechnet..." />;
+
+      return (
+        <div className="space-y-5">
+          {/* Tournament Selector */}
+          <div className="bg-white rounded-xl shadow p-5">
+            <label className="block text-lg font-semibold text-gray-700 mb-2">Turnier auswählen</label>
+            <select
+              value={selectedTournament?.id || ''}
+              onChange={e => {
+                const t = tournaments.find(x => x.id === e.target.value);
+                if (t) loadTournamentData(t, allPlayers);
+              }}
+              className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none bg-white"
+            >
+              {tournaments.map(t => (
+                <option key={t.id} value={t.id}>
+                  {new Date(t.date + 'T00:00:00').toLocaleDateString('de-CH', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })} — {t.player_count} Spieler
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Rankings Table */}
+          {selectedTournament && (
+            <div className="bg-white rounded-xl shadow overflow-hidden">
+              <div className="p-5 border-b">
+                <h2 className="text-xl font-bold text-gray-800">Rangliste</h2>
+              </div>
+              {rankings.length === 0 ? (
+                <p className="p-8 text-center text-gray-400 text-lg">Noch keine Resultate vorhanden.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-lg">
+                    <thead>
+                      <tr className="bg-gray-100">
+                        <th className="px-4 py-3 text-left font-bold text-gray-600">#</th>
+                        <th className="px-4 py-3 text-left font-bold text-gray-600">Name</th>
+                        {[1,2,3,4,5].map(r => (
+                          <th key={r} className="px-3 py-3 text-center font-bold text-gray-600 hidden sm:table-cell">R{r}</th>
+                        ))}
+                        <th className="px-4 py-3 text-right font-bold text-gray-800">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rankings.map((row, idx) => {
+                        const rank = idx + 1;
+                        const bgClass = rank === 1 ? 'bg-yellow-50' : rank === 2 ? 'bg-gray-50' : rank === 3 ? 'bg-orange-50' : '';
+                        const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : '';
+                        return (
+                          <tr key={row.id} className={`border-t ${bgClass}`}>
+                            <td className="px-4 py-3 font-bold text-gray-500">
+                              {medal || rank}
+                            </td>
+                            <td className="px-4 py-3 font-semibold text-gray-800">{row.name}</td>
+                            {[1,2,3,4,5].map(r => (
+                              <td key={r} className="px-3 py-3 text-center text-gray-500 hidden sm:table-cell">
+                                {row.rounds[r] || '—'}
+                              </td>
+                            ))}
+                            <td className="px-4 py-3 text-right font-bold text-gray-900 text-xl">
+                              {row.total > 0 ? row.total.toLocaleString('de-CH') : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ════════════════════════════════════════════
+    //  MAIN APP
+    // ════════════════════════════════════════════
+    function App() {
+      const [tab, setTab] = useState('turnier');
+
+      const tabs = [
+        { id: 'verwaltung', label: 'Verwaltung', icon: '⚙️' },
+        { id: 'turnier', label: 'Turnier-Abend', icon: '🃏' },
+        { id: 'rangliste', label: 'Rangliste', icon: '🏆' },
+      ];
+
+      return (
+        <ToastProvider>
+          <div className="min-h-screen bg-gray-100">
+            {/* Header */}
+            <header className="bg-white shadow-sm border-b sticky top-0 z-[100]">
+              <div className="max-w-4xl mx-auto px-4">
+                <h1 className="text-2xl font-bold text-gray-800 py-3 text-center">🃏 Jass-Turnier-Manager</h1>
+                <div className="flex">
+                  {tabs.map(t => (
+                    <button key={t.id}
+                      onClick={() => setTab(t.id)}
+                      className={`flex-1 py-3 text-center text-lg font-semibold transition-all ${tab === t.id ? 'tab-active' : 'tab-inactive'}`}>
+                      <span className="mr-1">{t.icon}</span> {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </header>
+
+            {/* Content */}
+            <main className="max-w-4xl mx-auto px-4 py-6">
+              {tab === 'verwaltung' && <VerwaltungTab />}
+              {tab === 'turnier' && <TurnierTab />}
+              {tab === 'rangliste' && <RanglisteTab />}
+            </main>
+
+            {/* Footer */}
+            <footer className="text-center py-6 text-sm text-gray-400">
+              Jass-Turnier-Manager v2.0 · Phase 2
+            </footer>
+          </div>
+        </ToastProvider>
+      );
+    }
+
+    // Mount
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
