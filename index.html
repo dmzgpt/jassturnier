@@ -425,6 +425,8 @@
       const [printRound, setPrintRound] = useState(null);
       const [qrHandled, setQrHandled] = useState(false);
       const [showQuickScan, setShowQuickScan] = useState(false);
+      const [showSpielerScan, setShowSpielerScan] = useState(false);
+      const [showAnmeldeScan, setShowAnmeldeScan] = useState(false);
 
       // Load data
       useEffect(() => {
@@ -615,11 +617,17 @@
               </div>
             </div>
 
-            {/* ★ QUICK SCAN — primary action */}
-            <button onClick={() => setShowQuickScan(true)}
-              className="w-full py-5 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl font-bold text-xl min-h-[64px] hover:from-amber-600 hover:to-orange-600 shadow-lg transition-all flex items-center justify-center gap-3">
-              📸 Tischzettel scannen
-            </button>
+            {/* ★ SCAN BUTTONS — primary actions */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button onClick={() => setShowQuickScan(true)}
+                className="py-5 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl font-bold text-xl min-h-[64px] hover:from-amber-600 hover:to-orange-600 shadow-lg transition-all flex items-center justify-center gap-2">
+                📸 Tischzettel scannen
+              </button>
+              <button onClick={() => setShowSpielerScan(true)}
+                className="py-5 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-xl font-bold text-xl min-h-[64px] hover:from-blue-600 hover:to-indigo-600 shadow-lg transition-all flex items-center justify-center gap-2">
+                📋 Spielerzettel prüfen
+              </button>
+            </div>
 
             {/* Round Buttons */}
             <div className="bg-white rounded-xl shadow p-5">
@@ -712,20 +720,14 @@
               <PrintSpielerzettel tournament={activeTournament} tableSheets={tableSheets} allPlayers={players} tournamentPlayerIds={[...selectedPlayers]} onClose={() => setPrintMode(null)} />
             )}
             {showQuickScan && (
-              <QuickScanDialog
-                tournament={activeTournament}
-                allPlayers={players}
-                tournamentPlayerIds={[...selectedPlayers]}
-                allTableSheets={tableSheets}
-                onClose={() => setShowQuickScan(false)}
-                onSaved={(sheet) => {
-                  setTableSheets(prev => {
-                    const without = prev.filter(s => !(s.round_number === sheet.round_number && s.table_number === sheet.table_number));
-                    return [...without, sheet];
-                  });
-                  setShowQuickScan(false);
-                }}
-              />
+              <QuickScanDialog tournament={activeTournament} allPlayers={players} tournamentPlayerIds={[...selectedPlayers]}
+                allTableSheets={tableSheets} onClose={() => setShowQuickScan(false)}
+                onSaved={(sheet) => { setTableSheets(prev => [...prev.filter(s => !(s.round_number === sheet.round_number && s.table_number === sheet.table_number)), sheet]); setShowQuickScan(false); }} />
+            )}
+            {showSpielerScan && (
+              <SpielerzettelScanDialog tournament={activeTournament} allPlayers={players}
+                tournamentPlayerIds={[...selectedPlayers]} allTableSheets={tableSheets}
+                onClose={() => setShowSpielerScan(false)} />
             )}
           </div>
         );
@@ -786,10 +788,14 @@
               </div>
             </div>
 
-            <div className="flex gap-3 mb-4">
+            <div className="flex gap-3 mb-4 flex-wrap">
               <input type="text" placeholder="🔍 Spieler suchen..." value={playerSearch}
                 onChange={e => setPlayerSearch(e.target.value)}
-                className="flex-1 px-4 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none" />
+                className="flex-1 px-4 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none" style={{minWidth:'140px'}} />
+              <button onClick={() => setShowAnmeldeScan(true)}
+                className="px-5 py-3 bg-amber-500 text-white rounded-lg font-semibold text-lg min-h-[48px] hover:bg-amber-600 whitespace-nowrap">
+                📸 Anmeldeblatt scannen
+              </button>
               <button onClick={selectAll}
                 className="px-5 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px] hover:bg-gray-300 whitespace-nowrap">
                 Alle auswählen
@@ -814,6 +820,12 @@
               </div>
             )}
           </div>
+
+          {showAnmeldeScan && (
+            <AnmeldeblattScanDialog allPlayers={activePlayers}
+              onClose={() => setShowAnmeldeScan(false)}
+              onApply={(ids) => { setSelectedPlayers(prev => { const next = new Set(prev); ids.forEach(id => next.add(id)); return next; }); setShowAnmeldeScan(false); }} />
+          )}
         </div>
       );
     }
@@ -1893,6 +1905,321 @@ Nur das JSON, nichts anderes.` }
     }
 
     // ════════════════════════════════════════════
+    //  SPIELERZETTEL SCAN (Cross-Check)
+    // ════════════════════════════════════════════
+    function SpielerzettelScanDialog({ tournament, allPlayers, tournamentPlayerIds, allTableSheets, onClose }) {
+      const toast = useToast();
+      const fileRef = useRef(null);
+      const [step, setStep] = useState('capture');
+      const [error, setError] = useState(null);
+      const [imageUrl, setImageUrl] = useState(null);
+      const [result, setResult] = useState(null);
+
+      useEffect(() => { setTimeout(() => fileRef.current?.click(), 200); }, []);
+
+      const tPlayers = allPlayers.filter(p => tournamentPlayerIds.includes(p.id));
+      const pName = (id) => { const p = allPlayers.find(x => x.id === id); return p ? p.name : '—'; };
+
+      const handleFile = async (file) => {
+        if (!file) return;
+        setError(null); setStep('processing'); setImageUrl(URL.createObjectURL(file));
+        try {
+          const { data: keyData } = await supabase.from('settings').select('value').eq('key', 'claude_api_key').single();
+          if (!keyData?.value) throw new Error('Kein API-Key hinterlegt.');
+          const { base64, mediaType } = await fileToBase64(file);
+
+          const res = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-api-key': keyData.value, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+            body: JSON.stringify({
+              model: 'claude-haiku-4-5-20251001', max_tokens: 800,
+              messages: [{ role: 'user', content: [
+                { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+                { type: 'text', text: `Dieses Bild zeigt einen ausgefüllten Jass-Spielerzettel.
+Antworte NUR mit JSON: {"name":"...","runden":[{"runde":1,"tisch":null,"team":null,"punkte":null},...],"total":null,"rang":null}
+- name: Spielername wie geschrieben
+- runden: Array mit 5 Einträgen. team: "schwarz" oder "rot". punkte: Zahl oder null.
+- total: Gesamtpunktzahl. rang: Rang-Nummer oder null.
+Nur JSON, nichts anderes.` }
+              ]}]
+            })
+          });
+          if (!res.ok) throw new Error(`API-Fehler ${res.status}`);
+          const data = await res.json();
+          const text = data.content[0].text.trim();
+          const match = text.match(/\{[\s\S]*\}/);
+          if (!match) throw new Error('Keine Daten erkannt');
+          const parsed = JSON.parse(match[0]);
+
+          // Match player
+          const playerMatch = matchPlayerName(parsed.name, tPlayers);
+
+          // Compare against system data
+          const comparisons = [];
+          if (playerMatch.player) {
+            const pid = playerMatch.player.id;
+            (parsed.runden || []).forEach(r => {
+              if (!r.runde) return;
+              const sheet = (allTableSheets || []).find(s => s.round_number === r.runde &&
+                ([s.schwarz_player1_id, s.schwarz_player2_id, s.rot_player1_id, s.rot_player2_id].includes(pid)));
+              if (sheet) {
+                const isSchwarz = [sheet.schwarz_player1_id, sheet.schwarz_player2_id].includes(pid);
+                const sysTeam = isSchwarz ? 'schwarz' : 'rot';
+                const sysPoints = sheet.games ? sheet.games.reduce((sum, g) => sum + (g.schwarz != null ? (isSchwarz ? g.schwarz : 157 - g.schwarz) : 0), 0) : null;
+                comparisons.push({
+                  runde: r.runde, zettelTisch: r.tisch, sysTisch: sheet.table_number,
+                  zettelTeam: r.team, sysTeam, zettelPunkte: r.punkte, sysPunkte: sysPoints,
+                  tischOk: r.tisch == null || r.tisch === sheet.table_number,
+                  teamOk: r.team == null || r.team === sysTeam,
+                  punkteOk: r.punkte == null || r.punkte === sysPoints
+                });
+              } else {
+                comparisons.push({ runde: r.runde, zettelTisch: r.tisch, zettelTeam: r.team, zettelPunkte: r.punkte, noSystemData: true });
+              }
+            });
+          }
+
+          // Compare total
+          let sysTotal = null;
+          if (playerMatch.player) {
+            sysTotal = comparisons.reduce((s, c) => s + (c.sysPunkte || 0), 0);
+          }
+
+          setResult({ parsed, playerMatch, comparisons, sysTotal });
+          setStep('result');
+        } catch (e) { setError(e.message); setStep('capture'); }
+      };
+
+      const allOk = result?.comparisons?.every(c => c.noSystemData || (c.tischOk && c.teamOk && c.punkteOk));
+
+      return (
+        <div className="fixed inset-0 z-[9000] flex items-start justify-center modal-backdrop overflow-y-auto py-4" onClick={onClose}>
+          <div className="bg-white rounded-xl shadow-2xl m-4 max-w-lg w-full fade-in" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b bg-gradient-to-r from-blue-500 to-indigo-500 rounded-t-xl flex items-center justify-between">
+              <h3 className="text-xl font-bold text-white">📋 Spielerzettel prüfen</h3>
+              <button onClick={onClose} className="text-3xl text-white opacity-70 hover:opacity-100 leading-none px-2">×</button>
+            </div>
+            <div className="p-5 space-y-4">
+              <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden"
+                onChange={e => { if (e.target.files[0]) handleFile(e.target.files[0]); e.target.value = ''; }} />
+
+              {step === 'capture' && (
+                <div className="text-center space-y-4 py-4">
+                  {error && <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-red-700 font-semibold text-left">❌ {error}</div>}
+                  <button onClick={() => fileRef.current?.click()} className="w-full py-5 bg-blue-50 border-2 border-blue-300 rounded-xl text-blue-800 font-bold text-xl min-h-[64px]">
+                    📸 Spielerzettel fotografieren
+                  </button>
+                  <p className="text-gray-500">Punkte auf dem Zettel werden mit den Systemdaten verglichen.</p>
+                </div>
+              )}
+
+              {step === 'processing' && (
+                <div className="text-center py-8">
+                  <svg className="animate-spin h-10 w-10 text-blue-600 mx-auto mb-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
+                  <p className="text-xl text-blue-700 font-bold">Quercheck läuft...</p>
+                </div>
+              )}
+
+              {step === 'result' && result && (
+                <div className="space-y-4">
+                  {imageUrl && <img src={imageUrl} alt="Scan" className="w-full max-h-28 object-contain rounded-lg border" />}
+
+                  {/* Player match */}
+                  <div className="bg-gray-100 rounded-lg p-3">
+                    <div className="text-sm text-gray-500">Spieler auf Zettel: <strong>{result.parsed.name}</strong></div>
+                    {result.playerMatch.player ? (
+                      <div className="text-lg font-bold text-green-700 mt-1">✅ {result.playerMatch.player.name}</div>
+                    ) : (
+                      <div className="text-lg font-bold text-red-600 mt-1">❓ Spieler nicht zugeordnet</div>
+                    )}
+                  </div>
+
+                  {/* Round comparisons */}
+                  {result.playerMatch.player && (
+                    <div className="space-y-2">
+                      <div className="text-sm font-bold text-gray-600">Vergleich Zettel ↔ System:</div>
+                      {result.comparisons.map((c, i) => (
+                        <div key={i} className={`rounded-lg p-3 text-sm ${c.noSystemData ? 'bg-gray-50 border border-gray-200' : (c.tischOk && c.teamOk && c.punkteOk) ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-300'}`}>
+                          <div className="font-bold text-gray-700 mb-1">Runde {c.runde}</div>
+                          {c.noSystemData ? (
+                            <div className="text-gray-400">Keine Systemdaten vorhanden</div>
+                          ) : (
+                            <div className="grid grid-cols-3 gap-2 text-center">
+                              <div>
+                                <div className="text-xs text-gray-500">Tisch</div>
+                                <div className={!c.tischOk ? 'text-red-700 font-bold' : ''}>{c.zettelTisch ?? '—'} {!c.tischOk ? `≠ ${c.sysTisch}` : c.tischOk && c.zettelTisch ? '✓' : ''}</div>
+                              </div>
+                              <div>
+                                <div className="text-xs text-gray-500">Team</div>
+                                <div className={!c.teamOk ? 'text-red-700 font-bold' : ''}>{c.zettelTeam ?? '—'} {!c.teamOk ? `≠ ${c.sysTeam}` : c.teamOk && c.zettelTeam ? '✓' : ''}</div>
+                              </div>
+                              <div>
+                                <div className="text-xs text-gray-500">Punkte</div>
+                                <div className={!c.punkteOk ? 'text-red-700 font-bold' : ''}>{c.zettelPunkte ?? '—'} {!c.punkteOk ? `≠ ${c.sysPunkte}` : c.punkteOk && c.zettelPunkte ? '✓' : ''}</div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      {/* Total */}
+                      <div className={`rounded-lg p-3 text-center font-bold ${result.parsed.total === result.sysTotal ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                        Total: Zettel {result.parsed.total ?? '—'} {result.parsed.total === result.sysTotal ? '✅' : `≠ System ${result.sysTotal}`}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Summary */}
+                  <div className={`text-center text-lg font-bold py-2 ${allOk ? 'text-green-600' : 'text-amber-600'}`}>
+                    {allOk ? '✅ Alles stimmt überein!' : '⚠️ Abweichungen gefunden — bitte prüfen'}
+                  </div>
+
+                  <div className="flex gap-3">
+                    <button onClick={() => { setStep('capture'); setResult(null); }} className="flex-1 py-3 bg-blue-100 text-blue-700 rounded-lg font-semibold text-lg min-h-[48px]">🔄 Nächsten scannen</button>
+                    <button onClick={onClose} className="flex-1 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px]">✕ Fertig</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ════════════════════════════════════════════
+    //  ANMELDEBLATT SCAN (Spieler-Registrierung)
+    // ════════════════════════════════════════════
+    function AnmeldeblattScanDialog({ allPlayers, onClose, onApply }) {
+      const toast = useToast();
+      const fileRef = useRef(null);
+      const [step, setStep] = useState('capture');
+      const [error, setError] = useState(null);
+      const [imageUrl, setImageUrl] = useState(null);
+      const [matches, setMatches] = useState([]);
+
+      useEffect(() => { setTimeout(() => fileRef.current?.click(), 200); }, []);
+
+      const handleFile = async (file) => {
+        if (!file) return;
+        setError(null); setStep('processing'); setImageUrl(URL.createObjectURL(file));
+        try {
+          const { data: keyData } = await supabase.from('settings').select('value').eq('key', 'claude_api_key').single();
+          if (!keyData?.value) throw new Error('Kein API-Key hinterlegt.');
+          const { base64, mediaType } = await fileToBase64(file);
+
+          const res = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-api-key': keyData.value, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+            body: JSON.stringify({
+              model: 'claude-haiku-4-5-20251001', max_tokens: 1000,
+              messages: [{ role: 'user', content: [
+                { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+                { type: 'text', text: `Dieses Bild zeigt ein handschriftliches Anmeldeblatt für ein Jass-Turnier mit einer Liste von Spielernamen.
+Lese alle Spielernamen ab. Antworte NUR mit JSON: {"namen":["Name 1","Name 2","Name 3",...]}
+Falls ein Name unleserlich ist, verwende "???" als Platzhalter. Nur JSON, nichts anderes.` }
+              ]}]
+            })
+          });
+          if (!res.ok) throw new Error(`API-Fehler ${res.status}`);
+          const data = await res.json();
+          const text = data.content[0].text.trim();
+          const match = text.match(/\{[\s\S]*\}/);
+          if (!match) throw new Error('Keine Namen erkannt');
+          const parsed = JSON.parse(match[0]);
+
+          // Match each name
+          const results = (parsed.namen || []).map(name => {
+            const m = matchPlayerName(name, allPlayers);
+            return { ocrName: name, match: m, selectedId: m.player?.id || null, included: !!m.player };
+          });
+          setMatches(results);
+          setStep('confirm');
+        } catch (e) { setError(e.message); setStep('capture'); }
+      };
+
+      const toggleInclude = (idx) => setMatches(prev => prev.map((m, i) => i === idx ? { ...m, included: !m.included } : m));
+      const setSelectedId = (idx, id) => setMatches(prev => prev.map((m, i) => i === idx ? { ...m, selectedId: id, included: !!id } : m));
+
+      const handleApply = () => {
+        const ids = matches.filter(m => m.included && m.selectedId).map(m => m.selectedId);
+        onApply(ids);
+        toast(`${ids.length} Spieler aus Anmeldeblatt übernommen`);
+      };
+
+      const confIcon = (c) => c === 'exact' ? '✅' : c === 'reversed' ? '🔄' : c === 'partial' ? '⚠️' : '❓';
+      const selectedCount = matches.filter(m => m.included && m.selectedId).length;
+
+      return (
+        <div className="fixed inset-0 z-[9000] flex items-start justify-center modal-backdrop overflow-y-auto py-4" onClick={onClose}>
+          <div className="bg-white rounded-xl shadow-2xl m-4 max-w-lg w-full fade-in" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b bg-gradient-to-r from-amber-500 to-orange-500 rounded-t-xl flex items-center justify-between">
+              <h3 className="text-xl font-bold text-white">📸 Anmeldeblatt scannen</h3>
+              <button onClick={onClose} className="text-3xl text-white opacity-70 hover:opacity-100 leading-none px-2">×</button>
+            </div>
+            <div className="p-5 space-y-4">
+              <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden"
+                onChange={e => { if (e.target.files[0]) handleFile(e.target.files[0]); e.target.value = ''; }} />
+
+              {step === 'capture' && (
+                <div className="text-center space-y-4 py-4">
+                  {error && <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-red-700 font-semibold text-left">❌ {error}</div>}
+                  <button onClick={() => fileRef.current?.click()} className="w-full py-5 bg-amber-50 border-2 border-amber-300 rounded-xl text-amber-800 font-bold text-xl min-h-[64px]">
+                    📸 Anmeldeblatt fotografieren
+                  </button>
+                  <p className="text-gray-500">Fotografiere die handschriftliche Anmeldeliste. Die Namen werden automatisch den Spielern zugeordnet.</p>
+                </div>
+              )}
+
+              {step === 'processing' && (
+                <div className="text-center py-8">
+                  <svg className="animate-spin h-10 w-10 text-amber-600 mx-auto mb-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
+                  <p className="text-xl text-amber-700 font-bold">Namen werden erkannt...</p>
+                </div>
+              )}
+
+              {step === 'confirm' && (
+                <div className="space-y-4">
+                  {imageUrl && <img src={imageUrl} alt="Scan" className="w-full max-h-28 object-contain rounded-lg border" />}
+                  <div className="text-sm text-gray-600 font-semibold">{matches.length} Namen erkannt · {selectedCount} zugeordnet</div>
+
+                  <div className="space-y-1 max-h-[50vh] overflow-y-auto">
+                    {matches.map((m, idx) => (
+                      <div key={idx} className={`flex items-center gap-2 p-2 rounded-lg border ${m.included ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200 opacity-60'}`}>
+                        <button onClick={() => toggleInclude(idx)} className="text-xl w-8 flex-shrink-0">{m.included ? '☑' : '☐'}</button>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm text-gray-500 truncate">«{m.ocrName}»</div>
+                          {m.match.confidence !== 'none' && m.selectedId ? (
+                            <div className="font-semibold text-green-800 flex items-center gap-1">
+                              <span className="text-sm">{confIcon(m.match.confidence)}</span>
+                              {allPlayers.find(p => p.id === m.selectedId)?.name}
+                            </div>
+                          ) : (
+                            <select value={m.selectedId || ''} onChange={e => setSelectedId(idx, e.target.value || null)}
+                              className="w-full px-2 py-1 border rounded text-sm font-semibold mt-1">
+                              <option value="">— Manuell zuordnen —</option>
+                              {allPlayers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            </select>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex gap-3 pt-2">
+                    <button onClick={onClose} className="flex-1 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px]">Abbrechen</button>
+                    <button onClick={handleApply} disabled={selectedCount === 0}
+                      className={`flex-1 py-3 rounded-lg font-bold text-lg min-h-[48px] text-white ${selectedCount > 0 ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-300'}`}>
+                      ✅ {selectedCount} Spieler übernehmen
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ════════════════════════════════════════════
     //  PRINT: TISCHZETTEL (matches paper form)
     // ════════════════════════════════════════════
     function PrintTischzettel({ tournament, roundNumber, tableSheets, allPlayers, onClose }) {
@@ -2244,7 +2571,7 @@ Nur das JSON, nichts anderes.` }
 
             {/* Footer */}
             <footer className="text-center py-6 text-sm text-gray-400">
-              Jass-Turnier-Manager v4.2 · Phase 4
+              Jass-Turnier-Manager v4.3 · Phase 4
             </footer>
           </div>
         </ToastProvider>
