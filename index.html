@@ -407,7 +407,7 @@
     // ════════════════════════════════════════════
     //  TAB 2: TURNIER-ABEND
     // ════════════════════════════════════════════
-    function TurnierTab() {
+    function TurnierTab({ qrParams, onQrHandled }) {
       const toast = useToast();
       const [players, setPlayers] = useState([]);
       const [tournaments, setTournaments] = useState([]);
@@ -423,6 +423,7 @@
       const [editingTable, setEditingTable] = useState(null);
       const [printMode, setPrintMode] = useState(null);
       const [printRound, setPrintRound] = useState(null);
+      const [qrHandled, setQrHandled] = useState(false);
 
       // Load data
       useEffect(() => {
@@ -433,9 +434,32 @@
           ]);
           setPlayers(pRes.data || []);
           setTournaments(tRes.data || []);
-          // Auto-load most recent active tournament
-          const recent = (tRes.data || []).find(t => t.status === 'active');
-          if (recent) loadTournament(recent);
+
+          // QR auto-navigate: load specific tournament
+          if (qrParams && !qrHandled) {
+            const qrTournament = (tRes.data || []).find(t => t.id === qrParams.tournamentId);
+            if (qrTournament) {
+              // Load tournament data
+              const { data: sheets } = await supabase.from('table_sheets').select('*').eq('tournament_id', qrTournament.id);
+              const { data: tp } = await supabase.from('tournament_players').select('player_id').eq('tournament_id', qrTournament.id);
+              const { data: allP } = await supabase.from('players').select('*').order('name');
+              setActiveTournament(qrTournament);
+              setTableSheets(sheets || []);
+              if (tp) setSelectedPlayers(new Set(tp.map(x => x.player_id)));
+              if (allP) setPlayers(allP);
+              setActiveRound(qrParams.round);
+              // Auto-open table editor
+              const existingSheet = (sheets || []).find(s => s.round_number === qrParams.round && s.table_number === qrParams.table);
+              setEditingTable({ roundNumber: qrParams.round, tableNumber: qrParams.table, sheet: existingSheet || null });
+              setQrHandled(true);
+            } else {
+              toast('Turnier nicht gefunden', 'error');
+            }
+          } else {
+            // Normal: auto-load most recent active tournament
+            const recent = (tRes.data || []).find(t => t.status === 'active');
+            if (recent) loadTournament(recent);
+          }
           setLoading(false);
         })();
       }, []);
@@ -774,6 +798,10 @@
     function TableSheetEditor({ tournament, roundNumber, tableNumber, existingSheet, allPlayers, tournamentPlayerIds, onClose, onSaved }) {
       const toast = useToast();
       const [saving, setSaving] = useState(false);
+      const [ocrLoading, setOcrLoading] = useState(false);
+      const [ocrPreview, setOcrPreview] = useState(null); // { scores: [...], imageUrl: '...' }
+      const [ocrError, setOcrError] = useState(null);
+      const fileInputRef = useRef(null);
 
       const tournamentPlayers = allPlayers.filter(p => tournamentPlayerIds.includes(p.id)).sort((a,b) => a.name.localeCompare(b.name));
 
@@ -856,6 +884,33 @@
         onSaved(result.data);
       };
 
+      // OCR: capture photo and extract scores
+      const handleOCR = async (file) => {
+        if (!file) return;
+        setOcrError(null);
+        setOcrLoading(true);
+        try {
+          // Load API key
+          const { data: keyData } = await supabase.from('settings').select('value').eq('key', 'claude_api_key').single();
+          if (!keyData?.value) throw new Error('Kein API-Key hinterlegt. Bitte unter Verwaltung → Einstellungen speichern.');
+
+          const { base64, mediaType } = await fileToBase64(file);
+          const imageUrl = URL.createObjectURL(file);
+          const scores = await performOCR(base64, mediaType, keyData.value);
+          setOcrPreview({ scores, imageUrl });
+        } catch (e) {
+          setOcrError(e.message || 'OCR fehlgeschlagen');
+        }
+        setOcrLoading(false);
+      };
+
+      const applyOCRScores = () => {
+        if (!ocrPreview) return;
+        setGames(ocrPreview.scores.map(s => ({ schwarz: s !== null ? String(s) : '' })));
+        setOcrPreview(null);
+        toast('📸 Punkte aus Foto übernommen — bitte kontrollieren!', 'success');
+      };
+
       return (
         <div className="fixed inset-0 z-[9000] flex items-start justify-center modal-backdrop overflow-y-auto py-4" onClick={onClose}>
           <div className="bg-white rounded-xl shadow-2xl m-4 max-w-lg w-full fade-in" onClick={e => e.stopPropagation()}>
@@ -934,6 +989,68 @@
                   {filledCount === 8 && !isComplete && <span className="text-red-600 font-bold text-lg">❌ Total = {grandTotal} — Muss 1'256 sein!</span>}
                   {filledCount > 0 && filledCount < 8 && <span className="text-gray-400 text-lg">{filledCount}/8 Spiele eingegeben</span>}
                 </div>
+              </div>
+
+              {/* OCR Photo Upload */}
+              <div className="border-2 border-dashed border-gray-300 rounded-xl p-4">
+                <input ref={fileInputRef} type="file" accept="image/*" capture="environment" className="hidden"
+                  onChange={e => { if (e.target.files[0]) handleOCR(e.target.files[0]); e.target.value = ''; }} />
+
+                {!ocrLoading && !ocrPreview && (
+                  <button onClick={() => fileInputRef.current?.click()}
+                    className="w-full py-4 rounded-xl bg-amber-50 border-2 border-amber-300 text-amber-800 font-bold text-lg min-h-[56px] hover:bg-amber-100 transition-all flex items-center justify-center gap-2">
+                    📸 Tischzettel fotografieren (OCR)
+                  </button>
+                )}
+
+                {ocrLoading && (
+                  <div className="text-center py-6">
+                    <svg className="animate-spin h-8 w-8 text-amber-600 mx-auto mb-3" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
+                    <p className="text-lg text-amber-700 font-semibold">Foto wird analysiert...</p>
+                    <p className="text-sm text-gray-500 mt-1">Claude liest die Punktzahlen ab</p>
+                  </div>
+                )}
+
+                {ocrError && (
+                  <div className="bg-red-50 border border-red-300 rounded-lg p-4 mt-3">
+                    <p className="text-red-700 font-semibold">❌ {ocrError}</p>
+                    <button onClick={() => { setOcrError(null); fileInputRef.current?.click(); }}
+                      className="mt-2 px-4 py-2 bg-red-100 text-red-700 rounded-lg font-semibold text-base min-h-[44px]">
+                      Nochmal versuchen
+                    </button>
+                  </div>
+                )}
+
+                {ocrPreview && (
+                  <div className="space-y-3">
+                    <p className="text-lg font-bold text-gray-800 text-center">📸 Erkannte Punkte — bitte prüfen:</p>
+                    {ocrPreview.imageUrl && (
+                      <img src={ocrPreview.imageUrl} alt="Foto" className="w-full max-h-48 object-contain rounded-lg border" />
+                    )}
+                    <div className="grid grid-cols-[40px_1fr_1fr] gap-2">
+                      <div></div>
+                      <div className="text-center font-bold text-sm text-gray-600">Schwarz</div>
+                      <div className="text-center font-bold text-sm text-red-600">Rot</div>
+                      {ocrPreview.scores.map((s, i) => (
+                        <React.Fragment key={i}>
+                          <span className="text-sm font-bold text-gray-400 text-right">{i+1}.</span>
+                          <div className="text-center font-semibold text-lg bg-gray-50 rounded py-1">{s ?? '?'}</div>
+                          <div className="text-center font-semibold text-lg bg-red-50 rounded py-1 text-red-700">{s !== null ? 157 - s : '?'}</div>
+                        </React.Fragment>
+                      ))}
+                    </div>
+                    <div className="flex gap-3">
+                      <button onClick={() => setOcrPreview(null)}
+                        className="flex-1 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px]">
+                        ✕ Verwerfen
+                      </button>
+                      <button onClick={applyOCRScores}
+                        className="flex-1 py-3 bg-green-600 text-white rounded-lg font-bold text-lg min-h-[48px] hover:bg-green-700">
+                        ✅ Übernehmen
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Actions */}
@@ -1143,6 +1260,191 @@
             <button onClick={() => window.print()} style={{ padding: '10px 24px', background: '#2563EB', color: 'white', borderRadius: 8, fontWeight: 700, fontSize: 16, border: 'none', cursor: 'pointer', minHeight: 48 }}>🖨️ Drucken</button>
             <button onClick={onClose} style={{ padding: '10px 24px', background: '#e5e7eb', color: '#374151', borderRadius: 8, fontWeight: 700, fontSize: 16, border: 'none', cursor: 'pointer', minHeight: 48 }}>✕ Schliessen</button>
           </div>
+        </div>
+      );
+    }
+
+    // ════════════════════════════════════════════
+    //  OCR: Claude API Image Recognition
+    // ════════════════════════════════════════════
+    async function performOCR(imageBase64, mediaType, apiKey) {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 600,
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBase64 } },
+              { type: 'text', text: `Dieses Bild zeigt einen ausgefüllten Jass-Tischzettel mit 8 Spielen.
+Jede Zeile hat eine Schwarz-Punktzahl (linke Spalte) und eine Rot-Punktzahl (rechte Spalte). Pro Spiel ergibt Schwarz + Rot immer exakt 157.
+Lese NUR die 8 Schwarz-Punktzahlen (linke Zahlenspalte) von oben nach unten ab.
+Antworte NUR mit einem JSON-Array von genau 8 Zahlen. Beispiel: [85, 102, 45, 130, 67, 90, 112, 25]
+Wenn eine Zeile unleserlich oder leer ist, verwende null.
+Kein anderer Text, nur das JSON-Array.` }
+            ]
+          }]
+        })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error?.message || `API-Fehler ${res.status}`);
+      }
+      const data = await res.json();
+      const text = data.content[0].text.trim();
+      // Extract JSON array from response
+      const match = text.match(/\[[\s\S]*?\]/);
+      if (!match) throw new Error('Konnte keine Zahlen im Bild erkennen');
+      const scores = JSON.parse(match[0]);
+      if (!Array.isArray(scores) || scores.length !== 8) throw new Error(`Erwartet 8 Werte, erhalten: ${scores.length}`);
+      // Validate each score
+      return scores.map(s => {
+        if (s === null || s === undefined) return null;
+        const n = parseInt(s);
+        if (isNaN(n) || n < 0 || n > 157) return null;
+        return n;
+      });
+    }
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result;
+          const base64 = result.split(',')[1];
+          resolve({ base64, mediaType: file.type || 'image/jpeg' });
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    // ════════════════════════════════════════════
+    //  PLAYER QR VIEW (Handy-Scan Spielerzettel)
+    // ════════════════════════════════════════════
+    function PlayerQRView({ tournamentId, playerId, onBack }) {
+      const [loading, setLoading] = useState(true);
+      const [tournament, setTournament] = useState(null);
+      const [player, setPlayer] = useState(null);
+      const [tableSheets, setTableSheets] = useState([]);
+      const [allPlayers, setAllPlayers] = useState([]);
+      const [error, setError] = useState(null);
+
+      useEffect(() => {
+        (async () => {
+          try {
+            const [tRes, pRes, sRes, apRes] = await Promise.all([
+              supabase.from('tournaments').select('*').eq('id', tournamentId).single(),
+              supabase.from('players').select('*').eq('id', playerId).single(),
+              supabase.from('table_sheets').select('*').eq('tournament_id', tournamentId),
+              supabase.from('players').select('id, name')
+            ]);
+            if (tRes.error || pRes.error) { setError('Turnier oder Spieler nicht gefunden.'); setLoading(false); return; }
+            setTournament(tRes.data);
+            setPlayer(pRes.data);
+            setTableSheets(sRes.data || []);
+            setAllPlayers(apRes.data || []);
+          } catch (e) { setError('Fehler beim Laden.'); }
+          setLoading(false);
+        })();
+
+        // Realtime
+        const channel = supabase
+          .channel('player_qr_live')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'table_sheets', filter: `tournament_id=eq.${tournamentId}` }, (payload) => {
+            if (payload.eventType === 'DELETE') setTableSheets(prev => prev.filter(s => s.id !== payload.old.id));
+            else setTableSheets(prev => [...prev.filter(s => s.id !== payload.new.id), payload.new]);
+          })
+          .subscribe();
+        return () => supabase.removeChannel(channel);
+      }, [tournamentId, playerId]);
+
+      const pName = (id) => { const p = allPlayers.find(x => x.id === id); return p ? p.name : '—'; };
+
+      // Compute player's rounds
+      const rounds = useMemo(() => {
+        const result = {};
+        tableSheets.forEach(sheet => {
+          const r = sheet.round_number;
+          const isSchwarz = [sheet.schwarz_player1_id, sheet.schwarz_player2_id].includes(playerId);
+          const isRot = [sheet.rot_player1_id, sheet.rot_player2_id].includes(playerId);
+          if (!isSchwarz && !isRot) return;
+          const team = isSchwarz ? 'Schwarz' : 'Rot';
+          let points = null;
+          if (sheet.games) {
+            const totalS = sheet.games.reduce((s, g) => s + (g.schwarz ?? 0), 0);
+            const totalR = sheet.games.reduce((s, g) => s + (g.schwarz !== null && g.schwarz !== undefined ? 157 - g.schwarz : 0), 0);
+            points = isSchwarz ? totalS : totalR;
+          }
+          const partnerId = isSchwarz
+            ? (sheet.schwarz_player1_id === playerId ? sheet.schwarz_player2_id : sheet.schwarz_player1_id)
+            : (sheet.rot_player1_id === playerId ? sheet.rot_player2_id : sheet.rot_player1_id);
+          result[r] = { table: sheet.table_number, team, points, partner: pName(partnerId) };
+        });
+        return result;
+      }, [tableSheets, playerId, allPlayers]);
+
+      const total = Object.values(rounds).reduce((s, r) => s + (r.points || 0), 0);
+
+      if (loading) return <Spinner text="Laden..." />;
+      if (error) return (
+        <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow p-8 text-center max-w-md">
+            <p className="text-xl text-red-600 font-bold mb-4">⚠️ {error}</p>
+            <button onClick={onBack} className="px-6 py-3 bg-blue-600 text-white rounded-lg font-bold text-lg min-h-[48px]">Zur Startseite</button>
+          </div>
+        </div>
+      );
+
+      const dateStr = new Date(tournament.date + 'T00:00:00').toLocaleDateString('de-CH', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+
+      return (
+        <div className="min-h-screen bg-gray-100">
+          <header className="bg-white shadow-sm border-b sticky top-0 z-[100]">
+            <div className="max-w-lg mx-auto px-4 py-3 flex items-center justify-between">
+              <h1 className="text-xl font-bold text-gray-800">🃏 Meine Übersicht</h1>
+              <button onClick={onBack} className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg font-semibold text-base min-h-[44px]">← Hauptmenü</button>
+            </div>
+          </header>
+          <main className="max-w-lg mx-auto px-4 py-6 space-y-5">
+            <div className="bg-white rounded-xl shadow p-5 text-center">
+              <h2 className="text-2xl font-bold text-gray-800">{player.name}</h2>
+              <p className="text-lg text-gray-500 mt-1">{dateStr}</p>
+            </div>
+
+            {[1,2,3,4,5].map(r => {
+              const info = rounds[r];
+              return (
+                <div key={r} className={`bg-white rounded-xl shadow p-4 ${info ? '' : 'opacity-50'}`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-lg font-bold text-gray-700">Runde {r}</h3>
+                    {info && <span className={`px-3 py-1 rounded-lg text-white font-bold text-sm ${info.team === 'Schwarz' ? 'bg-gray-800' : 'bg-red-600'}`}>{info.team}</span>}
+                  </div>
+                  {info ? (
+                    <div className="grid grid-cols-3 gap-3 text-center">
+                      <div><div className="text-sm text-gray-500">Tisch</div><div className="text-2xl font-bold text-gray-800">{info.table}</div></div>
+                      <div><div className="text-sm text-gray-500">Partner</div><div className="text-lg font-semibold text-gray-700">{info.partner}</div></div>
+                      <div><div className="text-sm text-gray-500">Punkte</div><div className="text-2xl font-bold text-blue-600">{info.points ?? '—'}</div></div>
+                    </div>
+                  ) : (
+                    <p className="text-gray-400 text-center">Noch nicht zugewiesen</p>
+                  )}
+                </div>
+              );
+            })}
+
+            <div className="bg-blue-50 rounded-xl shadow p-5 text-center border-2 border-blue-200">
+              <div className="text-sm text-blue-600 font-semibold">Total Punkte</div>
+              <div className="text-4xl font-bold text-blue-700 mt-1">{total > 0 ? total.toLocaleString('de-CH') : '—'}</div>
+            </div>
+          </main>
         </div>
       );
     }
@@ -1437,6 +1739,33 @@
     // ════════════════════════════════════════════
     function App() {
       const [tab, setTab] = useState('turnier');
+      const [qrParams, setQrParams] = useState(null);
+
+      // Parse QR URL parameters on load
+      useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const t = params.get('t');
+        const r = params.get('r');
+        const tbl = params.get('tbl');
+        const p = params.get('p');
+        if (t && r && tbl) {
+          setQrParams({ type: 'table', tournamentId: t, round: parseInt(r), table: parseInt(tbl) });
+          setTab('turnier');
+        } else if (t && p) {
+          setQrParams({ type: 'player', tournamentId: t, playerId: p });
+        }
+        // Clean URL so refresh doesn't re-trigger
+        if (t) window.history.replaceState({}, '', window.location.pathname);
+      }, []);
+
+      // Player QR scan → show dedicated player view
+      if (qrParams?.type === 'player') {
+        return (
+          <ToastProvider>
+            <PlayerQRView tournamentId={qrParams.tournamentId} playerId={qrParams.playerId} onBack={() => setQrParams(null)} />
+          </ToastProvider>
+        );
+      }
 
       const tabs = [
         { id: 'verwaltung', label: 'Verwaltung', icon: '⚙️' },
@@ -1466,13 +1795,13 @@
             {/* Content */}
             <main className="max-w-4xl mx-auto px-4 py-6">
               {tab === 'verwaltung' && <VerwaltungTab />}
-              {tab === 'turnier' && <TurnierTab />}
+              {tab === 'turnier' && <TurnierTab qrParams={qrParams?.type === 'table' ? qrParams : null} onQrHandled={() => setQrParams(null)} />}
               {tab === 'rangliste' && <RanglisteTab />}
             </main>
 
             {/* Footer */}
             <footer className="text-center py-6 text-sm text-gray-400">
-              Jass-Turnier-Manager v3.1 · Phase 3
+              Jass-Turnier-Manager v4.0 · Phase 4
             </footer>
           </div>
         </ToastProvider>
