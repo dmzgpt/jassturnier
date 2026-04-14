@@ -35,7 +35,7 @@
     /* Toast */
     @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
     .toast-slide { animation: slideIn 0.3s ease-out; }
-    /* Print styles */
+    /* Print */
     @media print {
       body { background: white !important; margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       .no-print, .toast-slide { display: none !important; }
@@ -43,17 +43,10 @@
       .print-page-break { page-break-after: always; break-after: page; }
       .print-avoid-break { page-break-inside: avoid; break-inside: avoid; }
       .print-overlay { position: static !important; background: white !important; overflow: visible !important; }
-      .print-overlay > .print-controls { display: none !important; }
-      /* When print-portal has content, hide the main app */
       body.printing-active #root { display: none !important; }
     }
-    @media screen {
-      .print-only { display: none !important; }
-    }
-    /* Print overlay on screen */
-    .print-overlay-screen {
-      position: fixed; inset: 0; z-index: 10000; background: white; overflow-y: auto;
-    }
+    @media screen { .print-only { display: none !important; } }
+    .print-overlay-screen { position: fixed; inset: 0; z-index: 10000; background: white; overflow-y: auto; }
   </style>
   <script>
     tailwind.config = {
@@ -428,7 +421,7 @@
       const [activeRound, setActiveRound] = useState(null);
       const [tableSheets, setTableSheets] = useState([]);
       const [editingTable, setEditingTable] = useState(null);
-      const [printMode, setPrintMode] = useState(null); // 'tischzettel' | 'spielerzettel' | null
+      const [printMode, setPrintMode] = useState(null);
       const [printRound, setPrintRound] = useState(null);
 
       // Load data
@@ -642,13 +635,12 @@
             <div className="bg-white rounded-xl shadow p-5">
               <h3 className="text-lg font-bold text-gray-700 mb-3">🖨️ Drucken</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {activeRound && (
+                {activeRound ? (
                   <button onClick={() => { setPrintMode('tischzettel'); setPrintRound(activeRound); }}
                     className="flex items-center justify-center gap-2 py-4 px-5 bg-gray-800 text-white rounded-xl font-bold text-lg min-h-[56px] hover:bg-gray-900 transition-all">
                     📋 Tischzettel Runde {activeRound}
                   </button>
-                )}
-                {!activeRound && (
+                ) : (
                   <div className="flex items-center justify-center py-4 px-5 bg-gray-100 text-gray-400 rounded-xl font-semibold text-lg min-h-[56px]">
                     Runde wählen für Tischzettel
                   </div>
@@ -682,22 +674,10 @@
 
             {/* Print Overlays */}
             {printMode === 'tischzettel' && printRound && (
-              <PrintTischzettel
-                tournament={activeTournament}
-                roundNumber={printRound}
-                tableSheets={tableSheets}
-                allPlayers={players}
-                onClose={() => setPrintMode(null)}
-              />
+              <PrintTischzettel tournament={activeTournament} roundNumber={printRound} tableSheets={tableSheets} allPlayers={players} onClose={() => setPrintMode(null)} />
             )}
             {printMode === 'spielerzettel' && (
-              <PrintSpielerzettel
-                tournament={activeTournament}
-                tableSheets={tableSheets}
-                allPlayers={players}
-                tournamentPlayerIds={[...selectedPlayers]}
-                onClose={() => setPrintMode(null)}
-              />
+              <PrintSpielerzettel tournament={activeTournament} tableSheets={tableSheets} allPlayers={players} tournamentPlayerIds={[...selectedPlayers]} onClose={() => setPrintMode(null)} />
             )}
           </div>
         );
@@ -1130,341 +1110,133 @@
             </div>
           )}
 
-          {/* Print Overlay */}
           {showPrintRangliste && selectedTournament && (
-            <PrintRangliste
-              tournament={selectedTournament}
-              rankings={rankings}
-              onClose={() => setShowPrintRangliste(false)}
-            />
+            <PrintRangliste tournament={selectedTournament} rankings={rankings} onClose={() => setShowPrintRangliste(false)} />
           )}
         </div>
       );
     }
 
     // ════════════════════════════════════════════
-    //  QR CODE HELPER
+    //  QR CODE + PRINT HELPERS
     // ════════════════════════════════════════════
-    function generateQRDataURL(text, cellSize = 3) {
-      try {
-        const qr = qrcode(0, 'M');
-        qr.addData(text);
-        qr.make();
-        return qr.createDataURL(cellSize, 0);
-      } catch (e) {
-        console.error('QR generation failed:', e);
-        return null;
-      }
-    }
-
     const BASE_URL = 'https://dmzgpt.github.io/jassturnier/';
 
-    function QRCode({ url, size = 80 }) {
-      const src = useMemo(() => generateQRDataURL(url, Math.max(2, Math.floor(size / 30))), [url, size]);
-      if (!src) return null;
-      return <img src={src} alt="QR-Code" style={{ width: size, height: size, imageRendering: 'pixelated' }} />;
+    function generateQRDataURL(text, cellSize = 3) {
+      try { const qr = qrcode(0, 'M'); qr.addData(text); qr.make(); return qr.createDataURL(cellSize, 0); }
+      catch (e) { return null; }
     }
-
-    // ════════════════════════════════════════════
-    //  PRINT PORTAL WRAPPER
-    // ════════════════════════════════════════════
+    function QRCode({ url, size = 64 }) {
+      const src = useMemo(() => generateQRDataURL(url, Math.max(2, Math.floor(size / 25))), [url, size]);
+      if (!src) return null;
+      return <img src={src} alt="QR" style={{ width: size, height: size, imageRendering: 'pixelated' }} />;
+    }
     function PrintPortal({ children }) {
-      useEffect(() => {
-        document.body.classList.add('printing-active');
-        return () => document.body.classList.remove('printing-active');
-      }, []);
+      useEffect(() => { document.body.classList.add('printing-active'); return () => document.body.classList.remove('printing-active'); }, []);
       return ReactDOM.createPortal(children, document.getElementById('print-portal'));
     }
-
-    // ════════════════════════════════════════════
-    //  PRINT: TISCHZETTEL
-    // ════════════════════════════════════════════
-    function PrintTischzettel({ tournament, roundNumber, tableSheets, allPlayers, onClose }) {
-      const playerName = (id) => {
-        const p = allPlayers.find(x => x.id === id);
-        return p ? p.name : '—';
-      };
-
-      const sheets = tableSheets
-        .filter(s => s.round_number === roundNumber)
-        .sort((a, b) => a.table_number - b.table_number);
-
-      // Generate empty sheets for tables without data
-      const allTables = [];
-      for (let t = 1; t <= tournament.table_count; t++) {
-        const existing = sheets.find(s => s.table_number === t);
-        allTables.push(existing || { table_number: t, empty: true });
-      }
-
-      const dateStr = new Date(tournament.date + 'T00:00:00').toLocaleDateString('de-CH', {
-        weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
-      });
-
+    function PrintControls({ title, onClose }) {
       return (
-        <PrintPortal>
-        <div className="print-overlay-screen print-overlay">
-          <div className="print-controls no-print" style={{ position: 'sticky', top: 0, zIndex: 10, background: '#f3f4f6', borderBottom: '2px solid #e5e7eb', padding: '12px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h2 style={{ fontSize: 20, fontWeight: 700 }}>Vorschau: Tischzettel Runde {roundNumber}</h2>
-            <div style={{ display: 'flex', gap: 12 }}>
-              <button onClick={() => window.print()} style={{ padding: '10px 24px', background: '#2563EB', color: 'white', borderRadius: 8, fontWeight: 700, fontSize: 16, border: 'none', cursor: 'pointer', minHeight: 48 }}>
-                🖨️ Drucken
-              </button>
-              <button onClick={onClose} style={{ padding: '10px 24px', background: '#e5e7eb', color: '#374151', borderRadius: 8, fontWeight: 700, fontSize: 16, border: 'none', cursor: 'pointer', minHeight: 48 }}>
-                ✕ Schliessen
-              </button>
-            </div>
-          </div>
-
-          <div className="print-only" style={{ display: 'block' }}>
-            {allTables.map((sheet, idx) => {
-              const qrUrl = `${BASE_URL}?mode=table&t=${tournament.id}&r=${roundNumber}&tbl=${sheet.table_number}`;
-              return (
-                <div key={sheet.table_number} className={idx < allTables.length - 1 ? 'print-page-break' : ''} style={{ padding: '20px 24px', maxWidth: 700, margin: '0 auto', fontFamily: "'Source Sans 3', sans-serif" }}>
-                  {/* Header */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, borderBottom: '3px solid #1F2937', paddingBottom: 12 }}>
-                    <div>
-                      <h1 style={{ fontSize: 28, fontWeight: 800, margin: 0, color: '#1F2937' }}>Tisch {sheet.table_number}</h1>
-                      <p style={{ fontSize: 18, color: '#6B7280', margin: '4px 0 0' }}>Runde {roundNumber} · {dateStr}</p>
-                    </div>
-                    <QRCode url={qrUrl} size={72} />
-                  </div>
-
-                  {/* Teams */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-                    <div style={{ background: '#1F2937', borderRadius: 10, padding: '12px 16px', color: 'white' }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, opacity: 0.7, marginBottom: 4 }}>TEAM SCHWARZ</div>
-                      <div style={{ fontSize: 20, fontWeight: 700 }}>{sheet.empty ? '________________' : playerName(sheet.schwarz_player1_id)}</div>
-                      <div style={{ fontSize: 20, fontWeight: 700 }}>{sheet.empty ? '________________' : playerName(sheet.schwarz_player2_id)}</div>
-                    </div>
-                    <div style={{ background: '#DC2626', borderRadius: 10, padding: '12px 16px', color: 'white' }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, opacity: 0.7, marginBottom: 4 }}>TEAM ROT</div>
-                      <div style={{ fontSize: 20, fontWeight: 700 }}>{sheet.empty ? '________________' : playerName(sheet.rot_player1_id)}</div>
-                      <div style={{ fontSize: 20, fontWeight: 700 }}>{sheet.empty ? '________________' : playerName(sheet.rot_player2_id)}</div>
-                    </div>
-                  </div>
-
-                  {/* Score Table */}
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 18 }}>
-                    <thead>
-                      <tr style={{ borderBottom: '2px solid #374151' }}>
-                        <th style={{ textAlign: 'center', padding: '8px 6px', width: 50, color: '#6B7280' }}>Spiel</th>
-                        <th style={{ textAlign: 'center', padding: '8px 6px', background: '#F3F4F6', fontWeight: 700 }}>Schwarz</th>
-                        <th style={{ textAlign: 'center', padding: '8px 6px', background: '#FEF2F2', fontWeight: 700, color: '#991B1B' }}>Rot</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[1,2,3,4,5,6,7,8].map(gameNum => {
-                        const game = sheet.games?.[gameNum - 1];
-                        const hasSchwarz = game?.schwarz !== null && game?.schwarz !== undefined;
-                        return (
-                          <tr key={gameNum} style={{ borderBottom: '1px solid #E5E7EB' }}>
-                            <td style={{ textAlign: 'center', padding: '10px 6px', color: '#9CA3AF', fontWeight: 700 }}>{gameNum}</td>
-                            <td style={{ textAlign: 'center', padding: '10px 6px', background: '#F9FAFB', fontSize: 20, fontWeight: 600, minHeight: 44 }}>
-                              {hasSchwarz ? game.schwarz : ''}
-                            </td>
-                            <td style={{ textAlign: 'center', padding: '10px 6px', background: '#FFF5F5', fontSize: 20, fontWeight: 600, minHeight: 44 }}>
-                              {hasSchwarz ? (157 - game.schwarz) : ''}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                    <tfoot>
-                      <tr style={{ borderTop: '3px solid #374151' }}>
-                        <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 800, color: '#374151' }}>Total</td>
-                        <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 800, fontSize: 22, background: '#F3F4F6' }}>
-                          {sheet.total_schwarz != null ? sheet.total_schwarz : ''}
-                        </td>
-                        <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 800, fontSize: 22, background: '#FEF2F2', color: '#991B1B' }}>
-                          {sheet.total_rot != null ? sheet.total_rot : ''}
-                        </td>
-                      </tr>
-                    </tfoot>
-                  </table>
-
-                  <p style={{ marginTop: 10, fontSize: 13, color: '#9CA3AF', textAlign: 'center' }}>
-                    Schwarz + Rot = 157 pro Spiel · Total = 1'256
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Screen preview mirrors the print layout */}
-          <div className="no-print" style={{ padding: '20px 0' }}>
-            {allTables.map((sheet, idx) => {
-              const qrUrl = `${BASE_URL}?mode=table&t=${tournament.id}&r=${roundNumber}&tbl=${sheet.table_number}`;
-              return (
-                <div key={sheet.table_number} style={{ padding: '20px 24px', maxWidth: 700, margin: '0 auto 24px', background: 'white', borderRadius: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, borderBottom: '3px solid #1F2937', paddingBottom: 12 }}>
-                    <div>
-                      <h1 style={{ fontSize: 28, fontWeight: 800, margin: 0, color: '#1F2937' }}>Tisch {sheet.table_number}</h1>
-                      <p style={{ fontSize: 18, color: '#6B7280', margin: '4px 0 0' }}>Runde {roundNumber} · {dateStr}</p>
-                    </div>
-                    <QRCode url={qrUrl} size={72} />
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-                    <div style={{ background: '#1F2937', borderRadius: 10, padding: '12px 16px', color: 'white' }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, opacity: 0.7, marginBottom: 4 }}>TEAM SCHWARZ</div>
-                      <div style={{ fontSize: 20, fontWeight: 700 }}>{sheet.empty ? '________________' : playerName(sheet.schwarz_player1_id)}</div>
-                      <div style={{ fontSize: 20, fontWeight: 700 }}>{sheet.empty ? '________________' : playerName(sheet.schwarz_player2_id)}</div>
-                    </div>
-                    <div style={{ background: '#DC2626', borderRadius: 10, padding: '12px 16px', color: 'white' }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, opacity: 0.7, marginBottom: 4 }}>TEAM ROT</div>
-                      <div style={{ fontSize: 20, fontWeight: 700 }}>{sheet.empty ? '________________' : playerName(sheet.rot_player1_id)}</div>
-                      <div style={{ fontSize: 20, fontWeight: 700 }}>{sheet.empty ? '________________' : playerName(sheet.rot_player2_id)}</div>
-                    </div>
-                  </div>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 18 }}>
-                    <thead>
-                      <tr style={{ borderBottom: '2px solid #374151' }}>
-                        <th style={{ textAlign: 'center', padding: '8px 6px', width: 50, color: '#6B7280' }}>Spiel</th>
-                        <th style={{ textAlign: 'center', padding: '8px 6px', background: '#F3F4F6', fontWeight: 700 }}>Schwarz</th>
-                        <th style={{ textAlign: 'center', padding: '8px 6px', background: '#FEF2F2', fontWeight: 700, color: '#991B1B' }}>Rot</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[1,2,3,4,5,6,7,8].map(gameNum => {
-                        const game = sheet.games?.[gameNum - 1];
-                        const hasSchwarz = game?.schwarz !== null && game?.schwarz !== undefined;
-                        return (
-                          <tr key={gameNum} style={{ borderBottom: '1px solid #E5E7EB' }}>
-                            <td style={{ textAlign: 'center', padding: '10px 6px', color: '#9CA3AF', fontWeight: 700 }}>{gameNum}</td>
-                            <td style={{ textAlign: 'center', padding: '10px 6px', background: '#F9FAFB', fontSize: 20, fontWeight: 600 }}>
-                              {hasSchwarz ? game.schwarz : ''}
-                            </td>
-                            <td style={{ textAlign: 'center', padding: '10px 6px', background: '#FFF5F5', fontSize: 20, fontWeight: 600 }}>
-                              {hasSchwarz ? (157 - game.schwarz) : ''}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                    <tfoot>
-                      <tr style={{ borderTop: '3px solid #374151' }}>
-                        <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 800 }}>Total</td>
-                        <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 800, fontSize: 22, background: '#F3F4F6' }}>
-                          {sheet.total_schwarz != null ? sheet.total_schwarz : ''}
-                        </td>
-                        <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 800, fontSize: 22, background: '#FEF2F2', color: '#991B1B' }}>
-                          {sheet.total_rot != null ? sheet.total_rot : ''}
-                        </td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                  <p style={{ marginTop: 10, fontSize: 13, color: '#9CA3AF', textAlign: 'center' }}>
-                    Schwarz + Rot = 157 pro Spiel · Total = 1'256
-                  </p>
-                </div>
-              );
-            })}
+        <div className="print-controls no-print" style={{ position: 'sticky', top: 0, zIndex: 10, background: '#f3f4f6', borderBottom: '2px solid #e5e7eb', padding: '12px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h2 style={{ fontSize: 20, fontWeight: 700 }}>{title}</h2>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <button onClick={() => window.print()} style={{ padding: '10px 24px', background: '#2563EB', color: 'white', borderRadius: 8, fontWeight: 700, fontSize: 16, border: 'none', cursor: 'pointer', minHeight: 48 }}>🖨️ Drucken</button>
+            <button onClick={onClose} style={{ padding: '10px 24px', background: '#e5e7eb', color: '#374151', borderRadius: 8, fontWeight: 700, fontSize: 16, border: 'none', cursor: 'pointer', minHeight: 48 }}>✕ Schliessen</button>
           </div>
         </div>
-        </PrintPortal>
       );
     }
 
     // ════════════════════════════════════════════
-    //  PRINT: SPIELERZETTEL
+    //  PRINT: TISCHZETTEL (matches paper form)
     // ════════════════════════════════════════════
-    function PrintSpielerzettel({ tournament, tableSheets, allPlayers, tournamentPlayerIds, onClose }) {
-      const playerName = (id) => {
-        const p = allPlayers.find(x => x.id === id);
-        return p ? p.name : '—';
+    function PrintTischzettel({ tournament, roundNumber, tableSheets, allPlayers, onClose }) {
+      const playerName = (id) => { const p = allPlayers.find(x => x.id === id); return p ? p.name : ''; };
+      const sheets = tableSheets.filter(s => s.round_number === roundNumber).sort((a, b) => a.table_number - b.table_number);
+      const allTables = [];
+      for (let t = 1; t <= tournament.table_count; t++) {
+        allTables.push(sheets.find(s => s.table_number === t) || { table_number: t, empty: true });
+      }
+
+      const S = { // Shared styles for the pen-friendly form
+        page: { padding: '24px 28px', maxWidth: 580, margin: '0 auto', fontFamily: "'Source Sans 3', Arial, sans-serif", color: '#000' },
+        border: '1.5px solid #000',
+        cell: { border: '1.5px solid #000', padding: '8px 10px', textAlign: 'center', fontSize: 16, height: 38, verticalAlign: 'middle' },
+        cellWide: { border: '1.5px solid #000', padding: '8px 10px', textAlign: 'center', fontSize: 16, height: 38, verticalAlign: 'middle', width: '42%' },
+        cellSmall: { border: '1.5px solid #000', padding: '4px', textAlign: 'center', fontSize: 14, height: 38, verticalAlign: 'middle', width: 36 },
+        header: { fontWeight: 700, fontSize: 15, padding: '6px 8px', textAlign: 'center', borderBottom: '1.5px solid #000' },
       };
 
-      const dateStr = new Date(tournament.date + 'T00:00:00').toLocaleDateString('de-CH', {
-        weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
-      });
-
-      // Build player assignment data: for each player, find their table/team in each round
-      const playerAssignments = useMemo(() => {
-        const assignments = {};
-        tournamentPlayerIds.forEach(pid => {
-          assignments[pid] = { name: playerName(pid), rounds: {} };
-        });
-
-        tableSheets.forEach(sheet => {
-          const round = sheet.round_number;
-          const tableNum = sheet.table_number;
-          [sheet.schwarz_player1_id, sheet.schwarz_player2_id].forEach(pid => {
-            if (pid && assignments[pid]) {
-              const partner = pid === sheet.schwarz_player1_id ? sheet.schwarz_player2_id : sheet.schwarz_player1_id;
-              assignments[pid].rounds[round] = {
-                table: tableNum, team: 'Schwarz',
-                partner: playerName(partner),
-                opponents: `${playerName(sheet.rot_player1_id)} & ${playerName(sheet.rot_player2_id)}`
-              };
-            }
-          });
-          [sheet.rot_player1_id, sheet.rot_player2_id].forEach(pid => {
-            if (pid && assignments[pid]) {
-              const partner = pid === sheet.rot_player1_id ? sheet.rot_player2_id : sheet.rot_player1_id;
-              assignments[pid].rounds[round] = {
-                table: tableNum, team: 'Rot',
-                partner: playerName(partner),
-                opponents: `${playerName(sheet.schwarz_player1_id)} & ${playerName(sheet.schwarz_player2_id)}`
-              };
-            }
-          });
-        });
-
-        return Object.entries(assignments)
-          .map(([id, data]) => ({ id, ...data }))
-          .sort((a, b) => a.name.localeCompare(b.name));
-      }, [tableSheets, tournamentPlayerIds, allPlayers]);
-
-      const renderCard = (player, forPrint) => {
-        const qrUrl = `${BASE_URL}?mode=player&t=${tournament.id}&p=${player.id}`;
-        const cardStyle = forPrint
-          ? { padding: '16px 20px', borderBottom: '1px dashed #D1D5DB', fontFamily: "'Source Sans 3', sans-serif" }
-          : { padding: '16px 20px', background: 'white', borderRadius: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.1)', marginBottom: 16 };
+      const renderSheet = (sheet) => {
+        const qrUrl = `${BASE_URL}?t=${tournament.id}&r=${roundNumber}&tbl=${sheet.table_number}`;
+        const s1 = sheet.empty ? '' : playerName(sheet.schwarz_player1_id);
+        const s2 = sheet.empty ? '' : playerName(sheet.schwarz_player2_id);
+        const r1 = sheet.empty ? '' : playerName(sheet.rot_player1_id);
+        const r2 = sheet.empty ? '' : playerName(sheet.rot_player2_id);
 
         return (
-          <div key={player.id} style={cardStyle} className={forPrint ? 'print-avoid-break' : ''}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+          <div style={S.page}>
+            {/* Header row: Runde / Tisch Nr / QR */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
               <div>
-                <h2 style={{ fontSize: 22, fontWeight: 800, margin: 0, color: '#1F2937' }}>{player.name}</h2>
-                <p style={{ fontSize: 14, color: '#6B7280', margin: '2px 0 0' }}>{dateStr}</p>
+                <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>
+                  Runde <span style={{ display: 'inline-block', borderBottom: '1.5px solid #000', minWidth: 40, textAlign: 'center', fontWeight: 400 }}>{roundNumber}</span>
+                </div>
+                <div style={{ fontSize: 15, fontWeight: 700 }}>
+                  Tisch Nr. <span style={{ display: 'inline-block', borderBottom: '1.5px solid #000', minWidth: 40, textAlign: 'center', fontWeight: 400 }}>{sheet.table_number}</span>
+                </div>
               </div>
               <QRCode url={qrUrl} size={56} />
             </div>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 16 }}>
+
+            {/* Player names table */}
+            <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 2 }}>
               <thead>
-                <tr style={{ borderBottom: '2px solid #E5E7EB' }}>
-                  <th style={{ textAlign: 'left', padding: '6px 8px', color: '#6B7280', fontWeight: 700, width: 70 }}>Runde</th>
-                  <th style={{ textAlign: 'center', padding: '6px 8px', color: '#6B7280', fontWeight: 700, width: 60 }}>Tisch</th>
-                  <th style={{ textAlign: 'center', padding: '6px 8px', color: '#6B7280', fontWeight: 700, width: 80 }}>Team</th>
-                  <th style={{ textAlign: 'left', padding: '6px 8px', color: '#6B7280', fontWeight: 700 }}>Partner</th>
-                  <th style={{ textAlign: 'left', padding: '6px 8px', color: '#6B7280', fontWeight: 700 }}>Gegner</th>
+                <tr>
+                  <th style={{ ...S.header, textAlign: 'center', width: '50%', borderTop: S.border, borderLeft: S.border, borderRight: 'none' }}>Schwarz</th>
+                  <th style={{ ...S.header, textAlign: 'center', width: '50%', borderTop: S.border, borderRight: S.border, borderLeft: S.border, color: '#DC2626' }}>Rot</th>
                 </tr>
               </thead>
               <tbody>
-                {[1,2,3,4,5].map(r => {
-                  const info = player.rounds[r];
+                <tr>
+                  <td style={{ border: S.border, padding: '5px 10px', fontSize: 14, height: 30 }}>{s1 || <span style={{ color: '#ccc' }}>Spieler Name</span>}</td>
+                  <td style={{ border: S.border, padding: '5px 10px', fontSize: 14, height: 30 }}>{r1 || <span style={{ color: '#ccc' }}>Spieler Name</span>}</td>
+                </tr>
+                <tr>
+                  <td style={{ border: S.border, padding: '5px 10px', fontSize: 14, height: 30 }}>{s2 || <span style={{ color: '#ccc' }}>Spieler Name</span>}</td>
+                  <td style={{ border: S.border, padding: '5px 10px', fontSize: 14, height: 30 }}>{r2 || <span style={{ color: '#ccc' }}>Spieler Name</span>}</td>
+                </tr>
+              </tbody>
+            </table>
+
+            {/* "Total 157" label */}
+            <div style={{ textAlign: 'right', fontSize: 12, color: '#999', marginBottom: 2, paddingRight: 4 }}>Total 157</div>
+
+            {/* Score table */}
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <tbody>
+                {[1,2,3,4,5,6,7,8].map(gameNum => {
+                  const game = sheet.games?.[gameNum - 1];
+                  const hasSchwarz = game?.schwarz !== null && game?.schwarz !== undefined;
                   return (
-                    <tr key={r} style={{ borderBottom: '1px solid #F3F4F6' }}>
-                      <td style={{ padding: '8px', fontWeight: 700, color: '#374151' }}>Runde {r}</td>
-                      <td style={{ textAlign: 'center', padding: '8px', fontWeight: 700, fontSize: 18 }}>
-                        {info ? info.table : '—'}
-                      </td>
-                      <td style={{ textAlign: 'center', padding: '8px' }}>
-                        {info ? (
-                          <span style={{
-                            display: 'inline-block', padding: '2px 10px', borderRadius: 6, fontWeight: 700, fontSize: 14,
-                            background: info.team === 'Schwarz' ? '#1F2937' : '#DC2626', color: 'white'
-                          }}>
-                            {info.team}
-                          </span>
-                        ) : '—'}
-                      </td>
-                      <td style={{ padding: '8px', color: '#374151' }}>{info ? info.partner : '—'}</td>
-                      <td style={{ padding: '8px', color: '#6B7280', fontSize: 14 }}>{info ? info.opponents : '—'}</td>
+                    <tr key={gameNum}>
+                      <td style={{ fontSize: 14, fontWeight: 700, padding: '0 8px 0 0', width: 60, textAlign: 'right', border: 'none' }}>Spiel {gameNum}</td>
+                      <td style={S.cellSmall}>{hasSchwarz ? '✓' : ''}</td>
+                      <td style={S.cellWide}>{hasSchwarz ? game.schwarz : ''}</td>
+                      <td style={S.cellWide}>{hasSchwarz ? (157 - game.schwarz) : ''}</td>
                     </tr>
                   );
                 })}
+                {/* Total row */}
+                <tr style={{ borderTop: '2.5px solid #000' }}>
+                  <td style={{ fontSize: 14, fontWeight: 700, padding: '0 8px 0 0', textAlign: 'right', border: 'none' }}>Total</td>
+                  <td style={S.cellSmall}></td>
+                  <td style={{ ...S.cellWide, fontWeight: 700 }}>{sheet.total_schwarz != null ? sheet.total_schwarz : ''}</td>
+                  <td style={{ ...S.cellWide, fontWeight: 700 }}>{sheet.total_rot != null ? sheet.total_rot : ''}</td>
+                </tr>
               </tbody>
             </table>
+            <div style={{ textAlign: 'right', fontSize: 12, color: '#999', marginTop: 2, paddingRight: 4 }}>1256</div>
           </div>
         );
       };
@@ -1472,31 +1244,137 @@
       return (
         <PrintPortal>
         <div className="print-overlay-screen print-overlay">
-          <div className="print-controls no-print" style={{ position: 'sticky', top: 0, zIndex: 10, background: '#f3f4f6', borderBottom: '2px solid #e5e7eb', padding: '12px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h2 style={{ fontSize: 20, fontWeight: 700 }}>Vorschau: Spielerzettel ({playerAssignments.length} Spieler)</h2>
-            <div style={{ display: 'flex', gap: 12 }}>
-              <button onClick={() => window.print()} style={{ padding: '10px 24px', background: '#2563EB', color: 'white', borderRadius: 8, fontWeight: 700, fontSize: 16, border: 'none', cursor: 'pointer', minHeight: 48 }}>
-                🖨️ Drucken
-              </button>
-              <button onClick={onClose} style={{ padding: '10px 24px', background: '#e5e7eb', color: '#374151', borderRadius: 8, fontWeight: 700, fontSize: 16, border: 'none', cursor: 'pointer', minHeight: 48 }}>
-                ✕ Schliessen
-              </button>
-            </div>
-          </div>
-
-          {/* Print version - 2 per page */}
+          <PrintControls title={`Vorschau: Tischzettel Runde ${roundNumber}`} onClose={onClose} />
           <div className="print-only" style={{ display: 'block' }}>
-            {playerAssignments.map((player, idx) => (
-              <React.Fragment key={player.id}>
-                {renderCard(player, true)}
-                {idx % 2 === 1 && idx < playerAssignments.length - 1 && <div className="print-page-break" />}
-              </React.Fragment>
+            {allTables.map((sheet, idx) => (
+              <div key={sheet.table_number} className={idx < allTables.length - 1 ? 'print-page-break' : ''}>{renderSheet(sheet)}</div>
             ))}
           </div>
+          <div className="no-print" style={{ padding: '20px 0' }}>
+            {allTables.map(sheet => (
+              <div key={sheet.table_number} style={{ maxWidth: 580, margin: '0 auto 24px', background: 'white', borderRadius: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.1)', overflow: 'hidden' }}>{renderSheet(sheet)}</div>
+            ))}
+          </div>
+        </div>
+        </PrintPortal>
+      );
+    }
 
-          {/* Screen preview */}
-          <div className="no-print" style={{ padding: 20, maxWidth: 800, margin: '0 auto' }}>
-            {playerAssignments.map(player => renderCard(player, false))}
+    // ════════════════════════════════════════════
+    //  PRINT: SPIELERZETTEL (matches paper form)
+    // ════════════════════════════════════════════
+    function PrintSpielerzettel({ tournament, tableSheets, allPlayers, tournamentPlayerIds, onClose }) {
+      const playerName = (id) => { const p = allPlayers.find(x => x.id === id); return p ? p.name : ''; };
+
+      // Build player assignments
+      const playerAssignments = useMemo(() => {
+        const assignments = {};
+        tournamentPlayerIds.forEach(pid => {
+          assignments[pid] = { name: playerName(pid), rounds: {} };
+        });
+        tableSheets.forEach(sheet => {
+          const round = sheet.round_number;
+          const tbl = sheet.table_number;
+          [sheet.schwarz_player1_id, sheet.schwarz_player2_id].forEach(pid => {
+            if (pid && assignments[pid]) assignments[pid].rounds[round] = { table: tbl, team: 'schwarz' };
+          });
+          [sheet.rot_player1_id, sheet.rot_player2_id].forEach(pid => {
+            if (pid && assignments[pid]) assignments[pid].rounds[round] = { table: tbl, team: 'rot' };
+          });
+        });
+        // Compute points per round
+        tableSheets.forEach(sheet => {
+          if (!sheet.games) return;
+          const totalS = sheet.games.reduce((s, g) => s + (g.schwarz ?? 0), 0);
+          const totalR = sheet.games.reduce((s, g) => s + (g.schwarz !== null && g.schwarz !== undefined ? 157 - g.schwarz : 0), 0);
+          [sheet.schwarz_player1_id, sheet.schwarz_player2_id].forEach(pid => {
+            if (pid && assignments[pid]?.rounds[sheet.round_number]) assignments[pid].rounds[sheet.round_number].points = totalS;
+          });
+          [sheet.rot_player1_id, sheet.rot_player2_id].forEach(pid => {
+            if (pid && assignments[pid]?.rounds[sheet.round_number]) assignments[pid].rounds[sheet.round_number].points = totalR;
+          });
+        });
+        return Object.entries(assignments).map(([id, data]) => ({ id, ...data })).sort((a, b) => a.name.localeCompare(b.name));
+      }, [tableSheets, tournamentPlayerIds, allPlayers]);
+
+      const B = '1.5px solid #000';
+
+      const renderCard = (player) => {
+        const qrUrl = `${BASE_URL}?t=${tournament.id}&p=${player.id}`;
+        const total = Object.values(player.rounds).reduce((s, r) => s + (r.points || 0), 0);
+        const hasAnyPoints = Object.values(player.rounds).some(r => r.points);
+
+        return (
+          <div style={{ padding: '20px 24px', maxWidth: 520, margin: '0 auto', fontFamily: "'Source Sans 3', Arial, sans-serif", color: '#000' }}>
+            {/* Name row with QR */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+              <div style={{ fontSize: 15, fontWeight: 700 }}>
+                Name: <span style={{ display: 'inline-block', borderBottom: B, minWidth: 220, paddingLeft: 8, fontWeight: 400, fontSize: 16 }}>{player.name}</span>
+              </div>
+              <QRCode url={qrUrl} size={52} />
+            </div>
+
+            {/* Main table */}
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={{ width: 80, padding: '6px 4px', fontSize: 13, fontWeight: 400 }}></th>
+                  <th style={{ padding: '6px 4px', fontSize: 13, fontWeight: 400, textAlign: 'center' }}>Tisch Nr.</th>
+                  <th style={{ padding: '6px 4px', fontSize: 13, fontWeight: 400, textAlign: 'center' }}>Schw.</th>
+                  <th style={{ padding: '6px 4px', fontSize: 13, fontWeight: 400, textAlign: 'center' }}>Rot</th>
+                  <th style={{ width: 20 }}></th>
+                  <th style={{ padding: '6px 4px', fontSize: 13, fontWeight: 400, textAlign: 'center' }}>Punkte</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[1,2,3,4,5].map(r => {
+                  const info = player.rounds[r];
+                  return (
+                    <tr key={r}>
+                      <td style={{ fontSize: 14, fontWeight: 700, padding: '0 8px 0 0', textAlign: 'left', border: 'none', height: 42 }}>Runde {r}</td>
+                      <td style={{ border: B, textAlign: 'center', fontSize: 16, height: 42, width: 60 }}>{info ? info.table : ''}</td>
+                      <td style={{ border: B, textAlign: 'center', fontSize: 16, height: 42, width: 48 }}>{info?.team === 'schwarz' ? '✕' : ''}</td>
+                      <td style={{ border: B, textAlign: 'center', fontSize: 16, height: 42, width: 48 }}>{info?.team === 'rot' ? '✕' : ''}</td>
+                      <td style={{ border: 'none', width: 20 }}></td>
+                      <td style={{ border: B, textAlign: 'center', fontSize: 16, fontWeight: 600, height: 42, width: 90 }}>{info?.points || ''}</td>
+                    </tr>
+                  );
+                })}
+                {/* Total */}
+                <tr>
+                  <td style={{ fontSize: 14, fontWeight: 700, padding: '0 8px 0 0', textAlign: 'left', border: 'none', height: 42 }}>Total</td>
+                  <td style={{ border: 'none' }}></td>
+                  <td style={{ border: 'none' }}></td>
+                  <td style={{ border: 'none' }}></td>
+                  <td style={{ border: 'none' }}></td>
+                  <td style={{ border: B, textAlign: 'center', fontSize: 18, fontWeight: 700, height: 42 }}>{hasAnyPoints ? total : ''}</td>
+                </tr>
+              </tbody>
+            </table>
+
+            {/* Rang */}
+            <div style={{ marginTop: 20, display: 'flex', alignItems: 'baseline', gap: 12 }}>
+              <span style={{ fontSize: 14, fontWeight: 700 }}>Rang</span>
+              <span style={{ flex: 1 }}></span>
+              <span style={{ display: 'inline-block', borderBottom: '1.5px dotted #000', minWidth: 100, textAlign: 'center' }}></span>
+            </div>
+          </div>
+        );
+      };
+
+      return (
+        <PrintPortal>
+        <div className="print-overlay-screen print-overlay">
+          <PrintControls title={`Vorschau: Spielerzettel (${playerAssignments.length} Spieler)`} onClose={onClose} />
+          <div className="print-only" style={{ display: 'block' }}>
+            {playerAssignments.map((player, idx) => (
+              <div key={player.id} className={idx < playerAssignments.length - 1 ? 'print-page-break' : ''}>{renderCard(player)}</div>
+            ))}
+          </div>
+          <div className="no-print" style={{ padding: '20px 0' }}>
+            {playerAssignments.map(player => (
+              <div key={player.id} style={{ maxWidth: 520, margin: '0 auto 24px', background: 'white', borderRadius: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.1)', overflow: 'hidden' }}>{renderCard(player)}</div>
+            ))}
           </div>
         </div>
         </PrintPortal>
@@ -1507,72 +1385,46 @@
     //  PRINT: RANGLISTE
     // ════════════════════════════════════════════
     function PrintRangliste({ tournament, rankings, onClose }) {
-      const dateStr = new Date(tournament.date + 'T00:00:00').toLocaleDateString('de-CH', {
-        weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
-      });
+      const dateStr = new Date(tournament.date + 'T00:00:00').toLocaleDateString('de-CH', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
       const renderTable = () => (
-        <div style={{ maxWidth: 750, margin: '0 auto', padding: '24px', fontFamily: "'Source Sans 3', sans-serif" }}>
-          <div style={{ textAlign: 'center', marginBottom: 20, borderBottom: '3px solid #1F2937', paddingBottom: 16 }}>
-            <h1 style={{ fontSize: 32, fontWeight: 800, margin: 0, color: '#1F2937' }}>🏆 Rangliste</h1>
-            <p style={{ fontSize: 18, color: '#6B7280', margin: '6px 0 0' }}>{dateStr} · {tournament.player_count} Spieler</p>
+        <div style={{ maxWidth: 700, margin: '0 auto', padding: '24px', fontFamily: "'Source Sans 3', Arial, sans-serif", color: '#000' }}>
+          <div style={{ textAlign: 'center', marginBottom: 16, borderBottom: '2px solid #000', paddingBottom: 12 }}>
+            <h1 style={{ fontSize: 26, fontWeight: 800, margin: 0 }}>Rangliste</h1>
+            <p style={{ fontSize: 15, color: '#666', margin: '4px 0 0' }}>{dateStr} · {tournament.player_count} Spieler</p>
           </div>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 17 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 15 }}>
             <thead>
-              <tr style={{ borderBottom: '2px solid #374151' }}>
-                <th style={{ textAlign: 'center', padding: '8px 6px', width: 50, color: '#6B7280' }}>#</th>
-                <th style={{ textAlign: 'left', padding: '8px 10px', color: '#374151' }}>Name</th>
-                {[1,2,3,4,5].map(r => (
-                  <th key={r} style={{ textAlign: 'center', padding: '8px 6px', color: '#6B7280', width: 65 }}>R{r}</th>
-                ))}
-                <th style={{ textAlign: 'right', padding: '8px 10px', color: '#374151', fontWeight: 800 }}>Total</th>
+              <tr style={{ borderBottom: '2px solid #000' }}>
+                <th style={{ textAlign: 'center', padding: '6px 4px', width: 40 }}>#</th>
+                <th style={{ textAlign: 'left', padding: '6px 8px' }}>Name</th>
+                {[1,2,3,4,5].map(r => <th key={r} style={{ textAlign: 'center', padding: '6px 4px', width: 55 }}>R{r}</th>)}
+                <th style={{ textAlign: 'right', padding: '6px 8px', fontWeight: 800 }}>Total</th>
               </tr>
             </thead>
             <tbody>
               {rankings.map((row, idx) => {
                 const rank = idx + 1;
-                const bg = rank === 1 ? '#FEF9C3' : rank === 2 ? '#F3F4F6' : rank === 3 ? '#FFF7ED' : 'transparent';
                 const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : '';
                 return (
-                  <tr key={row.id} style={{ borderBottom: '1px solid #E5E7EB', background: bg }}>
-                    <td style={{ textAlign: 'center', padding: '8px 6px', fontWeight: 700, color: '#6B7280', fontSize: 16 }}>
-                      {medal || rank}
-                    </td>
-                    <td style={{ padding: '8px 10px', fontWeight: 600, color: '#1F2937' }}>{row.name}</td>
-                    {[1,2,3,4,5].map(r => (
-                      <td key={r} style={{ textAlign: 'center', padding: '8px 6px', color: '#6B7280' }}>
-                        {row.rounds[r] || '—'}
-                      </td>
-                    ))}
-                    <td style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 800, color: '#1F2937', fontSize: 19 }}>
-                      {row.total > 0 ? row.total.toLocaleString('de-CH') : '—'}
-                    </td>
+                  <tr key={row.id} style={{ borderBottom: '1px solid #ddd' }}>
+                    <td style={{ textAlign: 'center', padding: '6px 4px', fontWeight: 700, color: '#666' }}>{medal || rank}</td>
+                    <td style={{ padding: '6px 8px', fontWeight: 600 }}>{row.name}</td>
+                    {[1,2,3,4,5].map(r => <td key={r} style={{ textAlign: 'center', padding: '6px 4px', color: '#666' }}>{row.rounds[r] || '—'}</td>)}
+                    <td style={{ textAlign: 'right', padding: '6px 8px', fontWeight: 800, fontSize: 17 }}>{row.total > 0 ? row.total.toLocaleString('de-CH') : '—'}</td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
-          <p style={{ marginTop: 16, fontSize: 13, color: '#9CA3AF', textAlign: 'center' }}>
-            Jass-Turnier-Manager · {new Date().toLocaleDateString('de-CH')}
-          </p>
+          <p style={{ marginTop: 12, fontSize: 11, color: '#999', textAlign: 'center' }}>Jass-Turnier-Manager · {new Date().toLocaleDateString('de-CH')}</p>
         </div>
       );
 
       return (
         <PrintPortal>
         <div className="print-overlay-screen print-overlay">
-          <div className="print-controls no-print" style={{ position: 'sticky', top: 0, zIndex: 10, background: '#f3f4f6', borderBottom: '2px solid #e5e7eb', padding: '12px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h2 style={{ fontSize: 20, fontWeight: 700 }}>Vorschau: Rangliste</h2>
-            <div style={{ display: 'flex', gap: 12 }}>
-              <button onClick={() => window.print()} style={{ padding: '10px 24px', background: '#2563EB', color: 'white', borderRadius: 8, fontWeight: 700, fontSize: 16, border: 'none', cursor: 'pointer', minHeight: 48 }}>
-                🖨️ Drucken
-              </button>
-              <button onClick={onClose} style={{ padding: '10px 24px', background: '#e5e7eb', color: '#374151', borderRadius: 8, fontWeight: 700, fontSize: 16, border: 'none', cursor: 'pointer', minHeight: 48 }}>
-                ✕ Schliessen
-              </button>
-            </div>
-          </div>
-
+          <PrintControls title="Vorschau: Rangliste" onClose={onClose} />
           <div className="print-only" style={{ display: 'block' }}>{renderTable()}</div>
           <div className="no-print">{renderTable()}</div>
         </div>
@@ -1620,7 +1472,7 @@
 
             {/* Footer */}
             <footer className="text-center py-6 text-sm text-gray-400">
-              Jass-Turnier-Manager v3.0 · Phase 3
+              Jass-Turnier-Manager v3.1 · Phase 3
             </footer>
           </div>
         </ToastProvider>
