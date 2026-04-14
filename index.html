@@ -424,6 +424,7 @@
       const [printMode, setPrintMode] = useState(null);
       const [printRound, setPrintRound] = useState(null);
       const [qrHandled, setQrHandled] = useState(false);
+      const [showQuickScan, setShowQuickScan] = useState(false);
 
       // Load data
       useEffect(() => {
@@ -614,6 +615,12 @@
               </div>
             </div>
 
+            {/* ★ QUICK SCAN — primary action */}
+            <button onClick={() => setShowQuickScan(true)}
+              className="w-full py-5 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl font-bold text-xl min-h-[64px] hover:from-amber-600 hover:to-orange-600 shadow-lg transition-all flex items-center justify-center gap-3">
+              📸 Tischzettel scannen
+            </button>
+
             {/* Round Buttons */}
             <div className="bg-white rounded-xl shadow p-5">
               <h3 className="text-lg font-bold text-gray-700 mb-3">Runden</h3>
@@ -703,6 +710,22 @@
             )}
             {printMode === 'spielerzettel' && (
               <PrintSpielerzettel tournament={activeTournament} tableSheets={tableSheets} allPlayers={players} tournamentPlayerIds={[...selectedPlayers]} onClose={() => setPrintMode(null)} />
+            )}
+            {showQuickScan && (
+              <QuickScanDialog
+                tournament={activeTournament}
+                allPlayers={players}
+                tournamentPlayerIds={[...selectedPlayers]}
+                allTableSheets={tableSheets}
+                onClose={() => setShowQuickScan(false)}
+                onSaved={(sheet) => {
+                  setTableSheets(prev => {
+                    const without = prev.filter(s => !(s.round_number === sheet.round_number && s.table_number === sheet.table_number));
+                    return [...without, sheet];
+                  });
+                  setShowQuickScan(false);
+                }}
+              />
             )}
           </div>
         );
@@ -1608,6 +1631,268 @@ Nur das JSON, nichts anderes.` }
     }
 
     // ════════════════════════════════════════════
+    //  QUICK SCAN DIALOG (one-shot scan & save)
+    // ════════════════════════════════════════════
+    function QuickScanDialog({ tournament, allPlayers, tournamentPlayerIds, allTableSheets, onClose, onSaved }) {
+      const toast = useToast();
+      const fileRef = useRef(null);
+      const [step, setStep] = useState('capture'); // capture | processing | confirm | saving
+      const [error, setError] = useState(null);
+      const [imageUrl, setImageUrl] = useState(null);
+
+      // OCR result
+      const [ocrData, setOcrData] = useState(null);
+      const [matchResults, setMatchResults] = useState(null);
+
+      // Editable fields
+      const [runde, setRunde] = useState(null);
+      const [tisch, setTisch] = useState(null);
+      const [s1Id, setS1Id] = useState(null);
+      const [s2Id, setS2Id] = useState(null);
+      const [r1Id, setR1Id] = useState(null);
+      const [r2Id, setR2Id] = useState(null);
+      const [punkte, setPunkte] = useState([]);
+
+      const tPlayers = allPlayers.filter(p => tournamentPlayerIds.includes(p.id)).sort((a,b) => a.name.localeCompare(b.name));
+
+      // Auto-open camera on mount
+      useEffect(() => { setTimeout(() => fileRef.current?.click(), 200); }, []);
+
+      const handleFile = async (file) => {
+        if (!file) return;
+        setError(null);
+        setStep('processing');
+        setImageUrl(URL.createObjectURL(file));
+        try {
+          const { data: keyData } = await supabase.from('settings').select('value').eq('key', 'claude_api_key').single();
+          if (!keyData?.value) throw new Error('Kein API-Key. Bitte unter Verwaltung → Einstellungen speichern.');
+
+          const { base64, mediaType } = await fileToBase64(file);
+          const data = await performOCR(base64, mediaType, keyData.value);
+          setOcrData(data);
+
+          // Match players
+          const mSchwarz = data.schwarz.map(n => matchPlayerName(n, tPlayers));
+          const mRot = data.rot.map(n => matchPlayerName(n, tPlayers));
+          setMatchResults({ schwarz: mSchwarz, rot: mRot });
+
+          // Set editable fields
+          setRunde(data.runde);
+          setTisch(data.tisch);
+          setS1Id(mSchwarz[0]?.player?.id || null);
+          setS2Id(mSchwarz[1]?.player?.id || null);
+          setR1Id(mRot[0]?.player?.id || null);
+          setR2Id(mRot[1]?.player?.id || null);
+          setPunkte(data.punkte);
+          setStep('confirm');
+        } catch (e) {
+          setError(e.message);
+          setStep('capture');
+        }
+      };
+
+      // Duplicate check
+      const getDuplicatesInRound = () => {
+        if (!runde) return new Set();
+        const others = (allTableSheets || []).filter(s => s.round_number === runde && s.table_number !== tisch);
+        const used = new Set();
+        others.forEach(s => { [s.schwarz_player1_id, s.schwarz_player2_id, s.rot_player1_id, s.rot_player2_id].filter(Boolean).forEach(id => used.add(id)); });
+        return used;
+      };
+
+      // Compute totals
+      const parsedPunkte = punkte.map(s => s !== null ? { schwarz: s, rot: 157 - s } : { schwarz: null, rot: null });
+      const totalS = parsedPunkte.reduce((sum, g) => sum + (g.schwarz ?? 0), 0);
+      const totalR = parsedPunkte.reduce((sum, g) => sum + (g.rot ?? 0), 0);
+      const filledCount = parsedPunkte.filter(g => g.schwarz !== null).length;
+      const isComplete = filledCount === 8 && totalS + totalR === 1256;
+
+      const allPlayersSet = s1Id && s2Id && r1Id && r2Id;
+      const uniquePlayers = new Set([s1Id, s2Id, r1Id, r2Id].filter(Boolean));
+      const hasDuplicateSelection = uniquePlayers.size < [s1Id, s2Id, r1Id, r2Id].filter(Boolean).length;
+      const canSave = runde && tisch && allPlayersSet && !hasDuplicateSelection;
+
+      const handleSave = async () => {
+        if (!canSave) return;
+        setStep('saving');
+        const gamesData = punkte.map(s => ({ schwarz: s }));
+        const row = {
+          tournament_id: tournament.id, round_number: runde, table_number: tisch,
+          schwarz_player1_id: s1Id, schwarz_player2_id: s2Id,
+          rot_player1_id: r1Id, rot_player2_id: r2Id,
+          games: gamesData, total_schwarz: totalS, total_rot: totalR,
+          verified: isComplete, source: 'ocr'
+        };
+        const existing = (allTableSheets || []).find(s => s.round_number === runde && s.table_number === tisch);
+        let result;
+        if (existing?.id) {
+          result = await supabase.from('table_sheets').update(row).eq('id', existing.id).select().single();
+        } else {
+          result = await supabase.from('table_sheets').upsert(row, { onConflict: 'tournament_id,round_number,table_number' }).select().single();
+        }
+        if (result.error) { toast('Fehler: ' + result.error.message, 'error'); setStep('confirm'); return; }
+        toast(isComplete ? `✅ Runde ${runde} Tisch ${tisch} komplett gespeichert` : `💾 Runde ${runde} Tisch ${tisch} zwischengespeichert`);
+        onSaved(result.data);
+      };
+
+      const pName = (id) => { const p = allPlayers.find(x => x.id === id); return p ? p.name : ''; };
+      const dupsInRound = getDuplicatesInRound();
+      const confIcon = (c) => c === 'exact' ? '✅' : c === 'reversed' ? '🔄' : c === 'partial' ? '⚠️' : '❓';
+
+      const renderPlayerSlot = (label, ocrName, match, currentId, setId, bgClass) => (
+        <div className={`${bgClass} rounded-lg p-2 mb-1`}>
+          <div className="text-xs text-white opacity-70 mb-1">{label}</div>
+          {ocrName && <div className="text-xs text-white opacity-50">OCR: «{ocrName}»</div>}
+          {currentId && match?.confidence !== 'none' ? (
+            <div className="flex items-center gap-1 mt-1">
+              <span className="text-sm">{confIcon(match.confidence)}</span>
+              <span className="text-white font-bold text-sm flex-1">{pName(currentId)}</span>
+              {dupsInRound.has(currentId) && <span className="bg-red-900 text-white text-xs px-1 rounded">DOPPELT</span>}
+              <button onClick={() => setId(null)} className="text-white opacity-60 text-xs hover:opacity-100">✕</button>
+            </div>
+          ) : (
+            <select value={currentId || ''} onChange={e => setId(e.target.value || null)}
+              className="w-full px-2 py-1 rounded text-sm font-semibold bg-white text-gray-800 mt-1">
+              <option value="">— Wählen —</option>
+              {tPlayers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          )}
+        </div>
+      );
+
+      return (
+        <div className="fixed inset-0 z-[9000] flex items-start justify-center modal-backdrop overflow-y-auto py-4" onClick={onClose}>
+          <div className="bg-white rounded-xl shadow-2xl m-4 max-w-lg w-full fade-in" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b bg-gradient-to-r from-amber-500 to-orange-500 rounded-t-xl flex items-center justify-between">
+              <h3 className="text-xl font-bold text-white">📸 Tischzettel scannen</h3>
+              <button onClick={onClose} className="text-3xl text-white opacity-70 hover:opacity-100 leading-none px-2">×</button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden"
+                onChange={e => { if (e.target.files[0]) handleFile(e.target.files[0]); e.target.value = ''; }} />
+
+              {/* STEP: Capture */}
+              {step === 'capture' && (
+                <div className="text-center space-y-4 py-4">
+                  {error && (
+                    <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-red-700 font-semibold text-left">❌ {error}</div>
+                  )}
+                  <button onClick={() => fileRef.current?.click()}
+                    className="w-full py-5 bg-amber-50 border-2 border-amber-300 rounded-xl text-amber-800 font-bold text-xl min-h-[64px]">
+                    📸 Foto aufnehmen
+                  </button>
+                  <p className="text-gray-500">Fotografiere einen ausgefüllten Tischzettel. Runde, Tisch, Spieler und Punkte werden automatisch erkannt.</p>
+                </div>
+              )}
+
+              {/* STEP: Processing */}
+              {step === 'processing' && (
+                <div className="text-center py-8">
+                  <svg className="animate-spin h-10 w-10 text-amber-600 mx-auto mb-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
+                  <p className="text-xl text-amber-700 font-bold">Wird analysiert...</p>
+                  <p className="text-gray-500 mt-1">Runde · Tisch · Spieler · Punkte</p>
+                </div>
+              )}
+
+              {/* STEP: Confirm */}
+              {step === 'confirm' && ocrData && (
+                <div className="space-y-4">
+                  {imageUrl && <img src={imageUrl} alt="Scan" className="w-full max-h-32 object-contain rounded-lg border" />}
+
+                  {/* Round & Table */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-sm font-bold text-gray-600">Runde</label>
+                      <select value={runde || ''} onChange={e => setRunde(parseInt(e.target.value) || null)}
+                        className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg text-lg font-bold min-h-[44px]">
+                        <option value="">—</option>
+                        {[1,2,3,4,5].map(r => <option key={r} value={r}>Runde {r}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-sm font-bold text-gray-600">Tisch</label>
+                      <select value={tisch || ''} onChange={e => setTisch(parseInt(e.target.value) || null)}
+                        className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg text-lg font-bold min-h-[44px]">
+                        <option value="">—</option>
+                        {Array.from({ length: tournament.table_count }, (_, i) => i + 1).map(t => <option key={t} value={t}>Tisch {t}</option>)}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Players */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <div className="text-center font-bold text-sm text-gray-700 mb-1">Schwarz</div>
+                      {renderPlayerSlot('Spieler 1', ocrData.schwarz[0], matchResults?.schwarz[0], s1Id, setS1Id, 'bg-gray-700')}
+                      {renderPlayerSlot('Spieler 2', ocrData.schwarz[1], matchResults?.schwarz[1], s2Id, setS2Id, 'bg-gray-700')}
+                    </div>
+                    <div>
+                      <div className="text-center font-bold text-sm text-red-700 mb-1">Rot</div>
+                      {renderPlayerSlot('Spieler 1', ocrData.rot[0], matchResults?.rot[0], r1Id, setR1Id, 'bg-red-600')}
+                      {renderPlayerSlot('Spieler 2', ocrData.rot[1], matchResults?.rot[1], r2Id, setR2Id, 'bg-red-600')}
+                    </div>
+                  </div>
+
+                  {hasDuplicateSelection && (
+                    <div className="bg-red-50 border border-red-300 rounded-lg p-2 text-red-700 text-sm font-semibold">
+                      ⚠️ Ein Spieler ist mehrfach ausgewählt!
+                    </div>
+                  )}
+
+                  {/* Scores */}
+                  <div>
+                    <div className="grid grid-cols-[30px_1fr_1fr] gap-1 text-sm">
+                      <div></div>
+                      <div className="text-center font-bold text-gray-600">Schwarz</div>
+                      <div className="text-center font-bold text-red-600">Rot</div>
+                      {parsedPunkte.map((g, i) => (
+                        <React.Fragment key={i}>
+                          <span className="text-xs text-gray-400 text-right font-bold leading-8">{i+1}.</span>
+                          <input type="number" min="0" max="157" value={punkte[i] !== null ? punkte[i] : ''}
+                            onChange={e => { const v = e.target.value === '' ? null : Math.min(157, parseInt(e.target.value) || 0); setPunkte(prev => prev.map((p, j) => j === i ? v : p)); }}
+                            className={`w-full px-2 py-1 border rounded text-center text-base font-semibold ${g.schwarz !== null ? 'border-green-300 bg-green-50' : 'border-gray-300'}`} />
+                          <div className={`px-2 py-1 border rounded text-center text-base font-semibold ${g.rot !== null ? 'border-green-300 bg-green-50 text-green-800' : 'border-gray-200 text-gray-400'}`}>
+                            {g.rot !== null ? g.rot : '—'}
+                          </div>
+                        </React.Fragment>
+                      ))}
+                    </div>
+                    <div className="mt-2 text-center">
+                      {isComplete && <span className="text-green-600 font-bold">✅ {totalS} + {totalR} = 1'256</span>}
+                      {filledCount === 8 && !isComplete && <span className="text-red-600 font-bold">❌ {totalS + totalR} ≠ 1'256</span>}
+                      {filledCount > 0 && filledCount < 8 && <span className="text-gray-400">{filledCount}/8 Spiele</span>}
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex gap-3 pt-2">
+                    <button onClick={() => { setStep('capture'); setOcrData(null); }}
+                      className="flex-1 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px]">
+                      🔄 Neu scannen
+                    </button>
+                    <button onClick={handleSave} disabled={!canSave}
+                      className={`flex-1 py-3 rounded-lg font-bold text-lg min-h-[48px] text-white ${canSave ? (isComplete ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700') : 'bg-gray-300 cursor-not-allowed'}`}>
+                      {isComplete ? '✅ Speichern' : '💾 Speichern'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* STEP: Saving */}
+              {step === 'saving' && (
+                <div className="text-center py-8">
+                  <svg className="animate-spin h-8 w-8 text-green-600 mx-auto mb-3" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
+                  <p className="text-lg text-green-700 font-semibold">Wird gespeichert...</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ════════════════════════════════════════════
     //  PRINT: TISCHZETTEL (matches paper form)
     // ════════════════════════════════════════════
     function PrintTischzettel({ tournament, roundNumber, tableSheets, allPlayers, onClose }) {
@@ -1959,7 +2244,7 @@ Nur das JSON, nichts anderes.` }
 
             {/* Footer */}
             <footer className="text-center py-6 text-sm text-gray-400">
-              Jass-Turnier-Manager v4.1 · Phase 4
+              Jass-Turnier-Manager v4.2 · Phase 4
             </footer>
           </div>
         </ToastProvider>
