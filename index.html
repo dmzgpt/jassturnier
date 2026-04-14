@@ -593,6 +593,7 @@
       const [showSignupManager, setShowSignupManager] = useState(false);
       const [showPrintAnmelde, setShowPrintAnmelde] = useState(false);
       const [showPrintRangliste, setShowPrintRangliste] = useState(false);
+      const [deleteTournamentConfirm, setDeleteTournamentConfirm] = useState(false);
 
       useEffect(() => {
         (async () => {
@@ -655,6 +656,21 @@
         toast(`Turnier erstellt: ${tableCount} Tische`);
         setActiveTournament(t);
         setTableSheets([]);
+      };
+
+      const deleteTournament = async (tournament) => {
+        // Delete related data first, then the tournament
+        await supabase.from('table_sheets').delete().eq('tournament_id', tournament.id);
+        await supabase.from('tournament_players').delete().eq('tournament_id', tournament.id);
+        await supabase.from('tournament_signups').delete().eq('tournament_id', tournament.id);
+        const { error } = await supabase.from('tournaments').delete().eq('id', tournament.id);
+        if (error) { toast('Fehler beim Löschen: ' + error.message, 'error'); return; }
+        setActiveTournament(null); setActiveRound(null); setTableSheets([]); setSelectedPlayers(new Set());
+        setDeleteTournamentConfirm(false);
+        // Reload tournaments list
+        const { data: tData } = await supabase.from('tournaments').select('*').order('date', { ascending: false }).limit(50);
+        setTournaments(tData || []);
+        toast('Turnier gelöscht');
       };
 
       const togglePlayer = (id) => {
@@ -764,8 +780,12 @@
                   <h2 className="text-xl font-bold text-gray-800">Turnier {formatDateLong(activeTournament.date)}</h2>
                   <p className="text-lg text-gray-500">{activeTournament.player_count} Spieler · {activeTournament.table_count} Tische</p>
                 </div>
-                <button onClick={() => { setActiveTournament(null); setActiveRound(null); setTableSheets([]); }}
-                  className="px-5 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px] hover:bg-gray-300">← Zurück</button>
+                <div className="flex gap-2">
+                  <button onClick={() => setDeleteTournamentConfirm(true)}
+                    className="px-4 py-3 bg-red-100 text-red-600 rounded-lg font-semibold text-lg min-h-[48px] hover:bg-red-200">🗑️</button>
+                  <button onClick={() => { setActiveTournament(null); setActiveRound(null); setTableSheets([]); }}
+                    className="px-5 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px] hover:bg-gray-300">← Zurück</button>
+                </div>
               </div>
             </div>
 
@@ -861,6 +881,9 @@
             {showQuickScan && <QuickScanDialog tournament={activeTournament} allPlayers={players} tournamentPlayerIds={[...selectedPlayers]} allTableSheets={tableSheets} onClose={() => setShowQuickScan(false)} onSaved={(sheet) => { setTableSheets(prev => [...prev.filter(s => !(s.round_number === sheet.round_number && s.table_number === sheet.table_number)), sheet]); setShowQuickScan(false); }} />}
             {showSpielerScan && <SpielerzettelScanDialog tournament={activeTournament} allPlayers={players} tournamentPlayerIds={[...selectedPlayers]} allTableSheets={tableSheets} onClose={() => setShowSpielerScan(false)} />}
             {showPrintRangliste && <PrintRangliste tournament={activeTournament} rankings={rankings} onClose={() => setShowPrintRangliste(false)} />}
+            <ConfirmDialog open={deleteTournamentConfirm} title="Turnier löschen?"
+              message={`Turnier vom ${activeTournament ? formatDateLong(activeTournament.date) : ''} mit allen Tischblättern und Resultaten unwiderruflich löschen?`}
+              onConfirm={() => deleteTournament(activeTournament)} onCancel={() => setDeleteTournamentConfirm(false)} confirmLabel="Turnier löschen" danger />
           </div>
         );
       }
@@ -2666,7 +2689,7 @@ Nur Zeilen mit einem Namen ODER einem Kreuz aufnehmen. Nur JSON.` }
               {tab === 'rangliste' && <RanglisteTab />}
               {tab === 'saison' && <SaisonTab />}
             </main>
-            <footer className="text-center py-6 text-sm text-gray-400">Jass-Turnier-Manager v6.2 · Phase 6</footer>
+            <footer className="text-center py-6 text-sm text-gray-400">Jass-Turnier-Manager v6.3 · Phase 6</footer>
             <OfflineWarning />
           </div>
         </ToastProvider>
