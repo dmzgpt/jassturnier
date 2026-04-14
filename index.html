@@ -29,6 +29,8 @@
     .fade-in { animation: fadeIn 0.2s ease-out; }
     @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
     .toast-slide { animation: slideIn 0.3s ease-out; }
+    @keyframes pulse-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(37,99,235,0.3); } 50% { box-shadow: 0 0 0 8px rgba(37,99,235,0); } }
+    .pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
     @media print {
       body { background: white !important; margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       .no-print, .toast-slide { display: none !important; }
@@ -265,7 +267,6 @@
 
       return (
         <div className="space-y-6">
-          {/* Add Player */}
           <div className="bg-white rounded-xl shadow p-5">
             <h2 className="text-xl font-bold text-gray-800 mb-4">Neuer Spieler</h2>
             <div className="flex flex-col sm:flex-row gap-3">
@@ -277,7 +278,6 @@
             </div>
           </div>
 
-          {/* Player List */}
           <div className="bg-white rounded-xl shadow p-5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
               <h2 className="text-xl font-bold text-gray-800">Spieler <span className="text-gray-400 font-normal">({activeCount} aktiv / {players.length} total)</span></h2>
@@ -311,7 +311,6 @@
             </div>
           </div>
 
-          {/* API Key */}
           <div className="bg-white rounded-xl shadow p-5">
             <button onClick={() => setShowApiSection(!showApiSection)} className="flex items-center gap-2 text-lg font-bold text-gray-800">
               <span className="text-xl">{showApiSection ? '▾' : '▸'}</span> Einstellungen
@@ -331,7 +330,6 @@
             )}
           </div>
 
-          {/* Edit Modal */}
           {editPlayer && (
             <div className="fixed inset-0 z-[9000] flex items-center justify-center modal-backdrop" onClick={() => setEditPlayer(null)}>
               <div className="bg-white rounded-xl shadow-2xl p-6 m-4 max-w-md w-full fade-in" onClick={e => e.stopPropagation()}>
@@ -357,9 +355,159 @@
     }
 
     // ════════════════════════════════════════════
-    //  TAB 2: TURNIER-ABEND (with signup workflow)
+    //  TURNIER-FLOW WIZARD (Phase 6b)
     // ════════════════════════════════════════════
-    function TurnierTab({ qrParams, onQrHandled }) {
+    function TurnierFlowWizard({ tournament, tableSheets, activeRound, onSetRound, onStartScan, onShowRangliste, onPrintRangliste }) {
+      // Compute per-round status
+      const roundStats = useMemo(() => {
+        return [1,2,3,4,5].map(r => {
+          const sheets = tableSheets.filter(s => s.round_number === r);
+          const verified = sheets.filter(s => s.verified);
+          const withData = sheets.filter(s => s.games && s.games.some(g => g.schwarz !== null && g.schwarz !== undefined));
+          const errors = sheets.filter(s => {
+            if (!s.games) return false;
+            const filled = s.games.filter(g => g.schwarz !== null && g.schwarz !== undefined);
+            if (filled.length !== 8) return false;
+            const total = filled.reduce((sum, g) => sum + g.schwarz + (157 - g.schwarz), 0);
+            return total !== 1256;
+          });
+          return {
+            round: r,
+            total: tournament.table_count,
+            captured: withData.length,
+            verified: verified.length,
+            errors: errors.length,
+            complete: verified.length === tournament.table_count,
+            missingTables: Array.from({length: tournament.table_count}, (_, i) => i + 1)
+              .filter(t => !sheets.find(s => s.table_number === t && s.verified))
+          };
+        });
+      }, [tableSheets, tournament.table_count]);
+
+      const allComplete = roundStats.every(r => r.complete);
+      const totalVerified = roundStats.reduce((s, r) => s + r.verified, 0);
+      const totalTables = tournament.table_count * 5;
+      const progressPercent = totalTables > 0 ? Math.round((totalVerified / totalTables) * 100) : 0;
+
+      // Determine suggested next action
+      const suggestedRound = useMemo(() => {
+        for (let i = 0; i < 5; i++) {
+          if (!roundStats[i].complete) return i + 1;
+        }
+        return null;
+      }, [roundStats]);
+
+      const currentRoundStats = activeRound ? roundStats[activeRound - 1] : null;
+
+      return (
+        <div className="bg-white rounded-xl shadow p-5 space-y-4">
+          {/* Overall progress */}
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-bold text-gray-700">Turnier-Fortschritt</h3>
+            <span className="text-lg font-bold text-blue-600">{progressPercent}%</span>
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
+            <div className={`h-full rounded-full transition-all duration-500 ${allComplete ? 'bg-green-500' : 'bg-blue-500'}`}
+              style={{ width: `${progressPercent}%` }} />
+          </div>
+
+          {/* Round steps */}
+          <div className="flex gap-1 sm:gap-2">
+            {roundStats.map(rs => {
+              const isActive = activeRound === rs.round;
+              const isSuggested = suggestedRound === rs.round && !isActive;
+              let bgColor = 'bg-gray-100 border-gray-200';
+              let textColor = 'text-gray-400';
+              let icon = '⬜';
+              if (rs.complete) { bgColor = 'bg-green-50 border-green-300'; textColor = 'text-green-700'; icon = '✅'; }
+              else if (rs.errors > 0) { bgColor = 'bg-red-50 border-red-300'; textColor = 'text-red-600'; icon = '🔴'; }
+              else if (rs.captured > 0) { bgColor = 'bg-amber-50 border-amber-300'; textColor = 'text-amber-700'; icon = '🟡'; }
+              if (isActive) { bgColor = 'bg-blue-50 border-blue-500 ring-2 ring-blue-300'; }
+              return (
+                <button key={rs.round} onClick={() => onSetRound(rs.round)}
+                  className={`flex-1 flex flex-col items-center py-2 px-1 rounded-lg border-2 transition-all min-h-[64px] ${bgColor} ${isSuggested ? 'pulse-glow' : ''}`}>
+                  <span className="text-lg">{icon}</span>
+                  <span className={`text-sm font-bold ${textColor}`}>R{rs.round}</span>
+                  <span className={`text-xs ${textColor}`}>{rs.verified}/{rs.total}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Current round detail / suggestion */}
+          {!allComplete && activeRound && currentRoundStats && !currentRoundStats.complete && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-lg font-bold text-blue-800">Runde {activeRound}</span>
+                <span className="text-base text-blue-600 font-semibold">{currentRoundStats.verified} von {currentRoundStats.total} Tische ✅</span>
+              </div>
+              {currentRoundStats.missingTables.length > 0 && (
+                <div className="text-base text-blue-700 mb-3">
+                  Fehlend: {currentRoundStats.missingTables.map(t => `Tisch ${t}`).join(', ')}
+                </div>
+              )}
+              {currentRoundStats.errors > 0 && (
+                <div className="text-base text-red-700 font-semibold mb-3">
+                  ⚠️ {currentRoundStats.errors} Tisch{currentRoundStats.errors > 1 ? 'e' : ''} mit Fehlern (Total ≠ 1'256)
+                </div>
+              )}
+              <button onClick={onStartScan}
+                className="w-full py-3 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-lg font-bold text-lg min-h-[48px] hover:from-amber-600 hover:to-orange-600 transition-all">
+                📸 Nächsten Tischzettel scannen
+              </button>
+            </div>
+          )}
+
+          {/* Round complete → suggest next */}
+          {!allComplete && activeRound && currentRoundStats && currentRoundStats.complete && suggestedRound && (
+            <div className="bg-green-50 border border-green-300 rounded-lg p-4 text-center">
+              <div className="text-xl font-bold text-green-700 mb-2">✅ Runde {activeRound} komplett!</div>
+              <button onClick={() => onSetRound(suggestedRound)}
+                className="px-8 py-3 bg-green-600 text-white rounded-lg font-bold text-lg min-h-[48px] hover:bg-green-700 transition-all">
+                ➡️ Weiter zu Runde {suggestedRound}
+              </button>
+            </div>
+          )}
+
+          {/* Suggest starting round if none active */}
+          {!allComplete && !activeRound && suggestedRound && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center">
+              <div className="text-lg font-semibold text-blue-700 mb-2">👉 Starte mit Runde {suggestedRound}</div>
+              <button onClick={() => onSetRound(suggestedRound)}
+                className="px-8 py-3 bg-blue-600 text-white rounded-lg font-bold text-lg min-h-[48px] hover:bg-blue-700 transition-all">
+                Runde {suggestedRound} öffnen
+              </button>
+            </div>
+          )}
+
+          {/* All complete! */}
+          {allComplete && (
+            <div className="bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-300 rounded-xl p-5 text-center space-y-3">
+              <div className="text-3xl">🎉</div>
+              <div className="text-xl font-bold text-green-800">Turnier komplett!</div>
+              <div className="text-lg text-green-700">
+                {tournament.player_count} Spieler · 5 Runden · {totalVerified} Tischblätter erfasst
+              </div>
+              <div className="flex gap-3 justify-center flex-wrap">
+                <button onClick={onShowRangliste}
+                  className="px-6 py-3 bg-blue-600 text-white rounded-lg font-bold text-lg min-h-[48px] hover:bg-blue-700">
+                  📊 Rangliste anzeigen
+                </button>
+                <button onClick={onPrintRangliste}
+                  className="px-6 py-3 bg-gray-800 text-white rounded-lg font-bold text-lg min-h-[48px] hover:bg-gray-900">
+                  🖨️ Rangliste drucken
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ════════════════════════════════════════════
+    //  TAB 2: TURNIER-ABEND
+    // ════════════════════════════════════════════
+    function TurnierTab({ qrParams, onQrHandled, onSwitchTab }) {
       const toast = useToast();
       const [players, setPlayers] = useState([]);
       const [seasons, setSeasons] = useState([]);
@@ -382,7 +530,7 @@
       const [showAnmeldeScan, setShowAnmeldeScan] = useState(false);
       const [showSignupManager, setShowSignupManager] = useState(false);
       const [showPrintAnmelde, setShowPrintAnmelde] = useState(false);
-      const [signups, setSignups] = useState([]);
+      const [showPrintRangliste, setShowPrintRangliste] = useState(false);
 
       useEffect(() => {
         (async () => {
@@ -395,7 +543,6 @@
           setTournaments(tRes.data || []);
           setSeasons(sRes.data || []);
 
-          // Auto-select active season
           const activeSeason = (sRes.data || []).find(s => s.active);
           if (activeSeason) setSelectedSeasonId(activeSeason.id);
 
@@ -434,11 +581,6 @@
         if (allP) setPlayers(allP);
       };
 
-      const loadSignups = async (tournamentId) => {
-        const { data } = await supabase.from('tournament_signups').select('*').eq('tournament_id', tournamentId);
-        setSignups(data || []);
-      };
-
       const createTournament = async () => {
         if (selectedPlayers.size === 0) { toast('Bitte Spieler auswählen', 'warning'); return; }
         if (selectedPlayers.size % 4 !== 0) { toast(`Spieleranzahl muss durch 4 teilbar sein (aktuell: ${selectedPlayers.size})`, 'error'); return; }
@@ -469,14 +611,6 @@
         } else {
           setSelectedPlayers(prev => { const next = new Set(prev); filteredActive.forEach(p => next.add(p.id)); return next; });
         }
-      };
-
-      // Apply signups: select all players who have "zugesagt"
-      const applySignups = async () => {
-        if (!signups.length) return;
-        const zugesagt = signups.filter(s => s.status === 'zugesagt').map(s => s.player_id);
-        setSelectedPlayers(new Set(zugesagt));
-        toast(`${zugesagt.length} zugesagte Spieler übernommen`);
       };
 
       const getRoundStatus = (roundNum) => {
@@ -530,6 +664,24 @@
       const [showPrevious, setShowPrevious] = useState(false);
       const previousTournaments = tournaments.filter(t => !activeTournament || t.id !== activeTournament.id);
 
+      // Rankings for print
+      const rankings = useMemo(() => {
+        if (!activeTournament || tableSheets.length === 0) return [];
+        const playerMap = {};
+        players.forEach(p => { playerMap[p.id] = p.name; });
+        const scores = {};
+        [...selectedPlayers].forEach(pid => { scores[pid] = { name: playerMap[pid] || 'Unbekannt', rounds: {}, total: 0 }; });
+        tableSheets.forEach(sheet => {
+          if (!sheet.games) return;
+          const totalS = sheet.games.reduce((s, g) => s + (g.schwarz ?? 0), 0);
+          const totalR = sheet.games.reduce((s, g) => s + (g.schwarz !== null && g.schwarz !== undefined ? 157 - g.schwarz : 0), 0);
+          const round = sheet.round_number;
+          [sheet.schwarz_player1_id, sheet.schwarz_player2_id].forEach(pid => { if (pid && scores[pid]) { scores[pid].rounds[round] = (scores[pid].rounds[round] || 0) + totalS; scores[pid].total += totalS; } });
+          [sheet.rot_player1_id, sheet.rot_player2_id].forEach(pid => { if (pid && scores[pid]) { scores[pid].rounds[round] = (scores[pid].rounds[round] || 0) + totalR; scores[pid].total += totalR; } });
+        });
+        return Object.entries(scores).map(([id, data]) => ({ id, ...data })).sort((a, b) => b.total - a.total);
+      }, [activeTournament, tableSheets, players, selectedPlayers]);
+
       if (loading) return <Spinner text="Daten werden geladen..." />;
 
       // ─── ACTIVE TOURNAMENT VIEW ───
@@ -547,6 +699,17 @@
               </div>
             </div>
 
+            {/* Phase 6b: Flow Wizard */}
+            <TurnierFlowWizard
+              tournament={activeTournament}
+              tableSheets={tableSheets}
+              activeRound={activeRound}
+              onSetRound={setActiveRound}
+              onStartScan={() => setShowQuickScan(true)}
+              onShowRangliste={() => onSwitchTab('rangliste')}
+              onPrintRangliste={() => setShowPrintRangliste(true)}
+            />
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <button onClick={() => setShowQuickScan(true)}
                 className="py-5 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl font-bold text-xl min-h-[64px] hover:from-amber-600 hover:to-orange-600 shadow-lg transition-all flex items-center justify-center gap-2">
@@ -556,23 +719,6 @@
                 className="py-5 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-xl font-bold text-xl min-h-[64px] hover:from-blue-600 hover:to-indigo-600 shadow-lg transition-all flex items-center justify-center gap-2">
                 📋 Spielerzettel prüfen
               </button>
-            </div>
-
-            <div className="bg-white rounded-xl shadow p-5">
-              <h3 className="text-lg font-bold text-gray-700 mb-3">Runden</h3>
-              <div className="grid grid-cols-5 gap-3">
-                {[1,2,3,4,5].map(r => {
-                  const status = getRoundStatus(r);
-                  const isActive = activeRound === r;
-                  return (
-                    <button key={r} onClick={() => setActiveRound(r)}
-                      className={`flex flex-col items-center py-4 px-2 rounded-xl border-2 font-bold text-lg min-h-[80px] transition-all ${isActive ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-300' : 'border-gray-200 bg-white hover:border-gray-400'}`}>
-                      <span className="text-2xl mb-1">{roundStatusIcon[status]}</span>
-                      <span>Runde {r}</span>
-                    </button>
-                  );
-                })}
-              </div>
             </div>
 
             {activeRound && (
@@ -622,6 +768,7 @@
             {printMode === 'spielerzettel' && <PrintSpielerzettel tournament={activeTournament} tableSheets={tableSheets} allPlayers={players} tournamentPlayerIds={[...selectedPlayers]} onClose={() => setPrintMode(null)} />}
             {showQuickScan && <QuickScanDialog tournament={activeTournament} allPlayers={players} tournamentPlayerIds={[...selectedPlayers]} allTableSheets={tableSheets} onClose={() => setShowQuickScan(false)} onSaved={(sheet) => { setTableSheets(prev => [...prev.filter(s => !(s.round_number === sheet.round_number && s.table_number === sheet.table_number)), sheet]); setShowQuickScan(false); }} />}
             {showSpielerScan && <SpielerzettelScanDialog tournament={activeTournament} allPlayers={players} tournamentPlayerIds={[...selectedPlayers]} allTableSheets={tableSheets} onClose={() => setShowSpielerScan(false)} />}
+            {showPrintRangliste && <PrintRangliste tournament={activeTournament} rankings={rankings} onClose={() => setShowPrintRangliste(false)} />}
           </div>
         );
       }
@@ -674,7 +821,6 @@
             </div>
           </div>
 
-          {/* Signup Manager Button */}
           <div className="bg-white rounded-xl shadow p-5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
               <h2 className="text-xl font-bold text-gray-800">Spieler auswählen</h2>
@@ -722,7 +868,11 @@
           </div>
 
           {showAnmeldeScan && <AnmeldeblattScanDialog allPlayers={activePlayers} onClose={() => setShowAnmeldeScan(false)}
-            onApply={(ids) => { setSelectedPlayers(prev => { const next = new Set(prev); ids.forEach(id => next.add(id)); return next; }); setShowAnmeldeScan(false); }} />}
+            onApply={(ids) => { setSelectedPlayers(prev => { const next = new Set(prev); ids.forEach(id => next.add(id)); return next; }); setShowAnmeldeScan(false); }}
+            onPlayersChanged={async () => {
+              const { data } = await supabase.from('players').select('*').eq('active', true).order('name');
+              if (data) setPlayers(data);
+            }} />}
 
           {showSignupManager && <SignupManagerDialog date={date} allPlayers={activePlayers} selectedPlayers={selectedPlayers}
             onClose={() => setShowSignupManager(false)}
@@ -734,11 +884,11 @@
     }
 
     // ════════════════════════════════════════════
-    //  SIGNUP MANAGER DIALOG (Anmeldungs-Workflow)
+    //  SIGNUP MANAGER DIALOG
     // ════════════════════════════════════════════
     function SignupManagerDialog({ date, allPlayers, selectedPlayers, onClose, onApply }) {
       const toast = useToast();
-      const [signups, setSignups] = useState({});  // playerId -> status
+      const [signups, setSignups] = useState({});
       const [loading, setLoading] = useState(true);
       const [search, setSearch] = useState('');
       const [saving, setSaving] = useState(false);
@@ -746,7 +896,6 @@
 
       useEffect(() => {
         (async () => {
-          // Check if tournament for this date already has signups
           const { data: t } = await supabase.from('tournaments').select('id').eq('date', date).single();
           if (t) {
             setTournamentId(t.id);
@@ -757,7 +906,6 @@
               setSignups(map);
             }
           } else {
-            // No tournament yet — init from selectedPlayers
             const map = {};
             allPlayers.forEach(p => {
               map[p.id] = selectedPlayers.has(p.id) ? 'zugesagt' : 'offen';
@@ -775,7 +923,6 @@
       const saveSignups = async () => {
         setSaving(true);
         if (tournamentId) {
-          // Upsert all signups
           const rows = Object.entries(signups).map(([player_id, status]) => ({
             tournament_id: tournamentId, player_id, status
           }));
@@ -803,7 +950,6 @@
         abgesagt: 'bg-red-100 text-red-600 border-red-300',
         offen: 'bg-gray-100 text-gray-500 border-gray-300'
       };
-      const statusLabels = { zugesagt: '✅ Zugesagt', abgesagt: '❌ Abgesagt', offen: '⏳ Offen' };
 
       if (loading) return (
         <div className="fixed inset-0 z-[9000] flex items-center justify-center modal-backdrop"><Spinner text="Anmeldungen laden..." /></div>
@@ -816,9 +962,7 @@
               <h3 className="text-xl font-bold text-white">📋 Anmeldungen — {formatDateCH(date)}</h3>
               <button onClick={onClose} className="text-3xl text-white opacity-70 hover:opacity-100 leading-none px-2">×</button>
             </div>
-
             <div className="p-5 space-y-4">
-              {/* Summary */}
               <div className="grid grid-cols-3 gap-2 text-center">
                 <div className="bg-green-50 rounded-lg p-3 border border-green-200">
                   <div className="text-2xl font-bold text-green-700">{counts.zugesagt}</div>
@@ -833,16 +977,13 @@
                   <div className="text-sm text-gray-400">Offen</div>
                 </div>
               </div>
-
               {counts.zugesagt > 0 && counts.zugesagt % 4 !== 0 && (
                 <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-amber-800 text-base font-semibold">
                   ⚠️ {counts.zugesagt} Zusagen — brauche {4 - (counts.zugesagt % 4)} mehr für teilbar durch 4
                 </div>
               )}
-
               <input type="text" placeholder="🔍 Spieler suchen..." value={search} onChange={e => setSearch(e.target.value)}
                 className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none" />
-
               <div className="space-y-1 max-h-[50vh] overflow-y-auto">
                 {filtered.map(p => {
                   const status = signups[p.id] || 'offen';
@@ -851,23 +992,16 @@
                       <span className="flex-1 font-semibold text-lg truncate">{p.name}</span>
                       <div className="flex gap-1 flex-shrink-0">
                         <button onClick={() => setStatus(p.id, 'zugesagt')}
-                          className={`px-3 py-2 rounded-lg text-sm font-bold min-h-[40px] ${status === 'zugesagt' ? 'bg-green-600 text-white' : 'bg-white text-green-700 border border-green-300 hover:bg-green-50'}`}>
-                          ✅
-                        </button>
+                          className={`px-3 py-2 rounded-lg text-sm font-bold min-h-[40px] ${status === 'zugesagt' ? 'bg-green-600 text-white' : 'bg-white text-green-700 border border-green-300 hover:bg-green-50'}`}>✅</button>
                         <button onClick={() => setStatus(p.id, 'abgesagt')}
-                          className={`px-3 py-2 rounded-lg text-sm font-bold min-h-[40px] ${status === 'abgesagt' ? 'bg-red-600 text-white' : 'bg-white text-red-600 border border-red-300 hover:bg-red-50'}`}>
-                          ❌
-                        </button>
+                          className={`px-3 py-2 rounded-lg text-sm font-bold min-h-[40px] ${status === 'abgesagt' ? 'bg-red-600 text-white' : 'bg-white text-red-600 border border-red-300 hover:bg-red-50'}`}>❌</button>
                         <button onClick={() => setStatus(p.id, 'offen')}
-                          className={`px-3 py-2 rounded-lg text-sm font-bold min-h-[40px] ${status === 'offen' ? 'bg-gray-500 text-white' : 'bg-white text-gray-500 border border-gray-300 hover:bg-gray-50'}`}>
-                          ⏳
-                        </button>
+                          className={`px-3 py-2 rounded-lg text-sm font-bold min-h-[40px] ${status === 'offen' ? 'bg-gray-500 text-white' : 'bg-white text-gray-500 border border-gray-300 hover:bg-gray-50'}`}>⏳</button>
                       </div>
                     </div>
                   );
                 })}
               </div>
-
               <div className="flex gap-3 pt-2">
                 {tournamentId && (
                   <button onClick={saveSignups} disabled={saving}
@@ -887,7 +1021,7 @@
     }
 
     // ════════════════════════════════════════════
-    //  TABLE SHEET EDITOR (unchanged from Phase 4)
+    //  TABLE SHEET EDITOR
     // ════════════════════════════════════════════
     function TableSheetEditor({ tournament, roundNumber, tableNumber, existingSheet, allPlayers, tournamentPlayerIds, allTableSheets, onClose, onSaved }) {
       const toast = useToast();
@@ -1077,7 +1211,7 @@
     }
 
     // ════════════════════════════════════════════
-    //  TAB 3: RANGLISTE (single tournament)
+    //  TAB 3: RANGLISTE
     // ════════════════════════════════════════════
     function RanglisteTab() {
       const [loading, setLoading] = useState(true);
@@ -1183,7 +1317,7 @@
     }
 
     // ════════════════════════════════════════════
-    //  TAB 4: SAISON (Season management + ranking)
+    //  TAB 4: SAISON
     // ════════════════════════════════════════════
     function SaisonTab() {
       const toast = useToast();
@@ -1215,7 +1349,6 @@
 
       useEffect(() => { loadData(); }, [loadData]);
 
-      // Load sheets for season tournaments
       useEffect(() => {
         if (!selectedSeason) { setAllSheets([]); return; }
         const seasonTournaments = tournaments.filter(t => t.season_id === selectedSeason.id);
@@ -1232,19 +1365,14 @@
         return tournaments.filter(t => t.season_id === selectedSeason.id).sort((a, b) => a.date.localeCompare(b.date));
       }, [selectedSeason, tournaments]);
 
-      // Compute season rankings
       const seasonRankings = useMemo(() => {
         if (!selectedSeason || seasonTournaments.length === 0 || allSheets.length === 0) return [];
         const playerMap = {};
         allPlayers.forEach(p => { playerMap[p.id] = p.name; });
-
-        // Per tournament, compute each player's total
-        const playerTournamentScores = {}; // playerId -> [{ tournamentId, date, total }]
-
+        const playerTournamentScores = {};
         seasonTournaments.forEach(tournament => {
           const sheets = allSheets.filter(s => s.tournament_id === tournament.id);
-          const scores = {}; // playerId -> total for this tournament
-
+          const scores = {};
           sheets.forEach(sheet => {
             if (!sheet.games) return;
             const totalS = sheet.games.reduce((s, g) => s + (g.schwarz ?? 0), 0);
@@ -1252,96 +1380,62 @@
             [sheet.schwarz_player1_id, sheet.schwarz_player2_id].forEach(pid => { if (pid) scores[pid] = (scores[pid] || 0) + totalS; });
             [sheet.rot_player1_id, sheet.rot_player2_id].forEach(pid => { if (pid) scores[pid] = (scores[pid] || 0) + totalR; });
           });
-
           Object.entries(scores).forEach(([pid, total]) => {
             if (!playerTournamentScores[pid]) playerTournamentScores[pid] = [];
             playerTournamentScores[pid].push({ tournamentId: tournament.id, date: tournament.date, total });
           });
         });
-
-        // Apply ranking mode
         const mode = selectedSeason.ranking_mode || 'best_of';
         const bestOf = selectedSeason.best_of || 3;
-
         return Object.entries(playerTournamentScores).map(([pid, results]) => {
           const sorted = [...results].sort((a, b) => b.total - a.total);
           let countedResults, grandTotal;
-          if (mode === 'best_of') {
-            countedResults = sorted.slice(0, bestOf);
-            grandTotal = countedResults.reduce((s, r) => s + r.total, 0);
-          } else {
-            // sum_all
-            countedResults = sorted;
-            grandTotal = sorted.reduce((s, r) => s + r.total, 0);
-          }
-          return {
-            id: pid, name: playerMap[pid] || 'Unbekannt',
-            results: results.sort((a, b) => a.date.localeCompare(b.date)),
-            countedResults, total: grandTotal,
-            tournamentCount: results.length
-          };
+          if (mode === 'best_of') { countedResults = sorted.slice(0, bestOf); grandTotal = countedResults.reduce((s, r) => s + r.total, 0); }
+          else { countedResults = sorted; grandTotal = sorted.reduce((s, r) => s + r.total, 0); }
+          return { id: pid, name: playerMap[pid] || 'Unbekannt', results: results.sort((a, b) => a.date.localeCompare(b.date)), countedResults, total: grandTotal, tournamentCount: results.length };
         }).sort((a, b) => b.total - a.total);
       }, [selectedSeason, seasonTournaments, allSheets, allPlayers]);
 
       const createSeason = async (data) => {
-        if (data.active) {
-          // Deactivate all other seasons
-          await supabase.from('seasons').update({ active: false }).neq('id', 'none');
-        }
+        if (data.active) await supabase.from('seasons').update({ active: false }).neq('id', 'none');
         const { error } = await supabase.from('seasons').insert(data);
         if (error) { toast('Fehler: ' + error.message, 'error'); return; }
-        toast('Saison erstellt');
-        setShowCreateSeason(false);
-        loadData();
+        toast('Saison erstellt'); setShowCreateSeason(false); loadData();
       };
-
       const updateSeason = async (id, data) => {
-        if (data.active) {
-          await supabase.from('seasons').update({ active: false }).neq('id', id);
-        }
+        if (data.active) await supabase.from('seasons').update({ active: false }).neq('id', id);
         const { error } = await supabase.from('seasons').update(data).eq('id', id);
         if (error) { toast('Fehler: ' + error.message, 'error'); return; }
-        toast('Saison aktualisiert');
-        setEditSeason(null);
-        loadData();
+        toast('Saison aktualisiert'); setEditSeason(null); loadData();
       };
-
       const deleteSeason = async (season) => {
-        // Unlink tournaments first
         await supabase.from('tournaments').update({ season_id: null }).eq('season_id', season.id);
         const { error } = await supabase.from('seasons').delete().eq('id', season.id);
         if (error) { toast('Fehler: ' + error.message, 'error'); return; }
         setDeleteConfirm(null);
         if (selectedSeason?.id === season.id) setSelectedSeason(null);
-        toast('Saison gelöscht');
-        loadData();
+        toast('Saison gelöscht'); loadData();
       };
-
       const assignTournament = async (tournamentId, seasonId) => {
         const { error } = await supabase.from('tournaments').update({ season_id: seasonId }).eq('id', tournamentId);
         if (error) { toast('Fehler', 'error'); return; }
-        toast('Turnier zugewiesen');
-        loadData();
+        toast('Turnier zugewiesen'); loadData();
       };
-
       const unassignTournament = async (tournamentId) => {
         const { error } = await supabase.from('tournaments').update({ season_id: null }).eq('id', tournamentId);
         if (error) { toast('Fehler', 'error'); return; }
-        toast('Turnier entfernt');
-        loadData();
+        toast('Turnier entfernt'); loadData();
       };
 
       if (loading) return <Spinner text="Saisons werden geladen..." />;
 
       return (
         <div className="space-y-5">
-          {/* Season Selector / Creator */}
           <div className="bg-white rounded-xl shadow p-5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
               <h2 className="text-xl font-bold text-gray-800">Saison</h2>
               <button onClick={() => setShowCreateSeason(true)} className="px-5 py-3 bg-blue-600 text-white rounded-lg font-bold text-lg min-h-[48px] hover:bg-blue-700">+ Neue Saison</button>
             </div>
-
             {seasons.length === 0 ? (
               <p className="text-gray-400 text-lg text-center py-4">Noch keine Saison erstellt.</p>
             ) : (
@@ -1374,10 +1468,8 @@
             )}
           </div>
 
-          {/* Season Detail */}
           {selectedSeason && (
             <>
-              {/* Season Tournaments */}
               <div className="bg-white rounded-xl shadow p-5">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-lg font-bold text-gray-700">Turniere in «{selectedSeason.name}»</h3>
@@ -1389,10 +1481,7 @@
                   <div className="space-y-2">
                     {seasonTournaments.map(t => (
                       <div key={t.id} className="flex items-center justify-between px-4 py-3 rounded-lg border border-gray-200">
-                        <div>
-                          <span className="text-lg font-semibold text-gray-800">{formatDateCH(t.date)}</span>
-                          <span className="text-gray-500 ml-2">{t.player_count} Spieler</span>
-                        </div>
+                        <div><span className="text-lg font-semibold text-gray-800">{formatDateCH(t.date)}</span><span className="text-gray-500 ml-2">{t.player_count} Spieler</span></div>
                         <button onClick={() => unassignTournament(t.id)} className="px-3 py-2 bg-red-100 text-red-600 rounded-lg text-sm font-semibold min-h-[40px] hover:bg-red-200">Entfernen</button>
                       </div>
                     ))}
@@ -1400,16 +1489,13 @@
                 )}
               </div>
 
-              {/* Season Rankings */}
               <div className="bg-white rounded-xl shadow overflow-hidden">
                 <div className="p-5 border-b flex items-center justify-between">
                   <h3 className="text-xl font-bold text-gray-800">🏆 Saisonrangliste</h3>
-                  <div className="flex gap-2">
-                    {seasonRankings.length > 0 && <button onClick={() => setShowPrint(true)} className="px-5 py-2 bg-gray-800 text-white rounded-lg font-bold text-base min-h-[44px] hover:bg-gray-900">🖨️ Drucken</button>}
-                  </div>
+                  {seasonRankings.length > 0 && <button onClick={() => setShowPrint(true)} className="px-5 py-2 bg-gray-800 text-white rounded-lg font-bold text-base min-h-[44px] hover:bg-gray-900">🖨️ Drucken</button>}
                 </div>
                 <div className="px-5 py-2 bg-gray-50 border-b text-sm text-gray-500">
-                  Modus: {selectedSeason.ranking_mode === 'best_of' ? `Best of ${selectedSeason.best_of} (die ${selectedSeason.best_of} besten Turnierergebnisse)` : 'Summe aller Turniere'}
+                  Modus: {selectedSeason.ranking_mode === 'best_of' ? `Best of ${selectedSeason.best_of}` : 'Summe aller Turniere'}
                   {' · '}{seasonTournaments.length} Turniere
                 </div>
                 {seasonRankings.length === 0 ? (
@@ -1420,33 +1506,20 @@
                       <thead><tr className="bg-gray-100">
                         <th className="px-4 py-3 text-left font-bold text-gray-600">#</th>
                         <th className="px-4 py-3 text-left font-bold text-gray-600">Name</th>
-                        {seasonTournaments.map((t, i) => (
-                          <th key={t.id} className="px-3 py-3 text-center font-bold text-gray-600 hidden sm:table-cell" title={formatDateCH(t.date)}>
-                            T{i + 1}
-                          </th>
-                        ))}
+                        {seasonTournaments.map((t, i) => <th key={t.id} className="px-3 py-3 text-center font-bold text-gray-600 hidden sm:table-cell" title={formatDateCH(t.date)}>T{i + 1}</th>)}
                         <th className="px-3 py-3 text-center font-bold text-gray-600 hidden sm:table-cell">Anz.</th>
                         <th className="px-4 py-3 text-right font-bold text-gray-800">Total</th>
                       </tr></thead>
                       <tbody>
                         {seasonRankings.map((row, idx) => {
-                          const rank = idx + 1;
-                          const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : '';
-                          const bgClass = rank <= 3 ? ['bg-yellow-50', 'bg-gray-50', 'bg-orange-50'][rank - 1] : '';
+                          const rank = idx + 1; const medal = rank <= 3 ? ['🥇','🥈','🥉'][rank-1] : '';
+                          const bgClass = rank <= 3 ? ['bg-yellow-50','bg-gray-50','bg-orange-50'][rank-1] : '';
                           const countedIds = new Set(row.countedResults.map(r => r.tournamentId));
                           return (
                             <tr key={row.id} className={`border-t ${bgClass}`}>
                               <td className="px-4 py-3 font-bold text-gray-500">{medal || rank}</td>
                               <td className="px-4 py-3 font-semibold text-gray-800">{row.name}</td>
-                              {seasonTournaments.map(t => {
-                                const r = row.results.find(x => x.tournamentId === t.id);
-                                const isCounted = r && countedIds.has(t.id);
-                                return (
-                                  <td key={t.id} className={`px-3 py-3 text-center hidden sm:table-cell ${isCounted ? 'text-gray-800 font-semibold' : 'text-gray-300'}`}>
-                                    {r ? r.total.toLocaleString('de-CH') : '—'}
-                                  </td>
-                                );
-                              })}
+                              {seasonTournaments.map(t => { const r = row.results.find(x => x.tournamentId === t.id); const isCounted = r && countedIds.has(t.id); return <td key={t.id} className={`px-3 py-3 text-center hidden sm:table-cell ${isCounted ? 'text-gray-800 font-semibold' : 'text-gray-300'}`}>{r ? r.total.toLocaleString('de-CH') : '—'}</td>; })}
                               <td className="px-3 py-3 text-center text-gray-400 hidden sm:table-cell">{row.tournamentCount}</td>
                               <td className="px-4 py-3 text-right font-bold text-gray-900 text-xl">{row.total > 0 ? row.total.toLocaleString('de-CH') : '—'}</td>
                             </tr>
@@ -1460,32 +1533,10 @@
             </>
           )}
 
-          {/* Create/Edit Season Modal */}
-          {(showCreateSeason || editSeason) && (
-            <SeasonFormModal
-              season={editSeason}
-              onSave={(data) => editSeason ? updateSeason(editSeason.id, data) : createSeason(data)}
-              onClose={() => { setShowCreateSeason(false); setEditSeason(null); }}
-            />
-          )}
-
-          {/* Assign Tournament Modal */}
-          {showAssign && selectedSeason && (
-            <AssignTournamentModal
-              season={selectedSeason}
-              tournaments={tournaments}
-              onAssign={(tid) => assignTournament(tid, selectedSeason.id)}
-              onClose={() => setShowAssign(false)}
-            />
-          )}
-
-          {showPrint && selectedSeason && (
-            <PrintSaisonRangliste season={selectedSeason} rankings={seasonRankings} tournaments={seasonTournaments} onClose={() => setShowPrint(false)} />
-          )}
-
-          <ConfirmDialog open={!!deleteConfirm} title="Saison löschen?"
-            message={`"${deleteConfirm?.name}" löschen? Turniere werden nicht gelöscht, nur die Zuordnung entfernt.`}
-            onConfirm={() => deleteSeason(deleteConfirm)} onCancel={() => setDeleteConfirm(null)} confirmLabel="Löschen" danger />
+          {(showCreateSeason || editSeason) && <SeasonFormModal season={editSeason} onSave={(data) => editSeason ? updateSeason(editSeason.id, data) : createSeason(data)} onClose={() => { setShowCreateSeason(false); setEditSeason(null); }} />}
+          {showAssign && selectedSeason && <AssignTournamentModal season={selectedSeason} tournaments={tournaments} onAssign={(tid) => assignTournament(tid, selectedSeason.id)} onClose={() => setShowAssign(false)} />}
+          {showPrint && selectedSeason && <PrintSaisonRangliste season={selectedSeason} rankings={seasonRankings} tournaments={seasonTournaments} onClose={() => setShowPrint(false)} />}
+          <ConfirmDialog open={!!deleteConfirm} title="Saison löschen?" message={`"${deleteConfirm?.name}" löschen? Turniere werden nicht gelöscht, nur die Zuordnung entfernt.`} onConfirm={() => deleteSeason(deleteConfirm)} onCancel={() => setDeleteConfirm(null)} confirmLabel="Löschen" danger />
         </div>
       );
     }
@@ -1499,58 +1550,18 @@
       const [bestOf, setBestOf] = useState(season?.best_of || 3);
       const [active, setActive] = useState(season?.active || false);
       const [description, setDescription] = useState(season?.description || '');
-
-      const handleSave = () => {
-        if (!name.trim()) return;
-        onSave({ name: name.trim(), start_date: startDate || null, end_date: endDate || null, ranking_mode: rankingMode, best_of: bestOf, active, description: description.trim() || null });
-      };
-
+      const handleSave = () => { if (!name.trim()) return; onSave({ name: name.trim(), start_date: startDate || null, end_date: endDate || null, ranking_mode: rankingMode, best_of: bestOf, active, description: description.trim() || null }); };
       return (
         <div className="fixed inset-0 z-[9000] flex items-center justify-center modal-backdrop" onClick={onClose}>
           <div className="bg-white rounded-xl shadow-2xl p-6 m-4 max-w-md w-full fade-in" onClick={e => e.stopPropagation()}>
             <h3 className="text-xl font-bold text-gray-800 mb-4">{season ? 'Saison bearbeiten' : 'Neue Saison'}</h3>
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-semibold text-gray-600 mb-1">Name *</label>
-                <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="z.B. Saison 2025/26"
-                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none" />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-600 mb-1">Start</label>
-                  <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
-                    className="w-full px-3 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none" />
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold text-gray-600 mb-1">Ende</label>
-                  <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
-                    className="w-full px-3 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none" />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-600 mb-1">Wertungsmodus</label>
-                <select value={rankingMode} onChange={e => setRankingMode(e.target.value)}
-                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none bg-white">
-                  <option value="best_of">Best of X</option>
-                  <option value="sum_all">Alle Turniere zählen</option>
-                </select>
-              </div>
-              {rankingMode === 'best_of' && (
-                <div>
-                  <label className="block text-sm font-semibold text-gray-600 mb-1">Beste X Turniere zählen</label>
-                  <input type="number" min="1" max="20" value={bestOf} onChange={e => setBestOf(parseInt(e.target.value) || 1)}
-                    className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none" />
-                </div>
-              )}
-              <div>
-                <label className="block text-sm font-semibold text-gray-600 mb-1">Beschreibung (optional)</label>
-                <textarea value={description} onChange={e => setDescription(e.target.value)} rows={2} placeholder="z.B. Jass-Saison Herbst/Winter"
-                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg text-lg focus:border-blue-500 focus:outline-none" />
-              </div>
-              <label className="flex items-center gap-3 cursor-pointer select-none">
-                <input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} className="w-5 h-5 rounded" />
-                <span className="text-lg text-gray-700 font-semibold">Aktive Saison</span>
-              </label>
+              <div><label className="block text-sm font-semibold text-gray-600 mb-1">Name *</label><input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="z.B. Saison 2025/26" className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none" /></div>
+              <div className="grid grid-cols-2 gap-3"><div><label className="block text-sm font-semibold text-gray-600 mb-1">Start</label><input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full px-3 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none" /></div><div><label className="block text-sm font-semibold text-gray-600 mb-1">Ende</label><input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full px-3 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none" /></div></div>
+              <div><label className="block text-sm font-semibold text-gray-600 mb-1">Wertungsmodus</label><select value={rankingMode} onChange={e => setRankingMode(e.target.value)} className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none bg-white"><option value="best_of">Best of X</option><option value="sum_all">Alle Turniere zählen</option></select></div>
+              {rankingMode === 'best_of' && <div><label className="block text-sm font-semibold text-gray-600 mb-1">Beste X Turniere zählen</label><input type="number" min="1" max="20" value={bestOf} onChange={e => setBestOf(parseInt(e.target.value) || 1)} className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-blue-500 focus:outline-none" /></div>}
+              <div><label className="block text-sm font-semibold text-gray-600 mb-1">Beschreibung (optional)</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows={2} placeholder="z.B. Jass-Saison Herbst/Winter" className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg text-lg focus:border-blue-500 focus:outline-none" /></div>
+              <label className="flex items-center gap-3 cursor-pointer select-none"><input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} className="w-5 h-5 rounded" /><span className="text-lg text-gray-700 font-semibold">Aktive Saison</span></label>
             </div>
             <div className="flex gap-3 justify-end mt-6">
               <button onClick={onClose} className="px-5 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px]">Abbrechen</button>
@@ -1561,29 +1572,22 @@
       );
     }
 
-    // ─── Assign Tournament Modal ───
     function AssignTournamentModal({ season, tournaments, onAssign, onClose }) {
       const unassigned = tournaments.filter(t => !t.season_id || t.season_id !== season.id);
       return (
         <div className="fixed inset-0 z-[9000] flex items-center justify-center modal-backdrop" onClick={onClose}>
           <div className="bg-white rounded-xl shadow-2xl p-6 m-4 max-w-md w-full fade-in" onClick={e => e.stopPropagation()}>
             <h3 className="text-xl font-bold text-gray-800 mb-4">Turnier zu «{season.name}» hinzufügen</h3>
-            {unassigned.length === 0 ? (
-              <p className="text-gray-400 text-lg py-4 text-center">Alle Turniere sind bereits zugewiesen.</p>
-            ) : (
+            {unassigned.length === 0 ? <p className="text-gray-400 text-lg py-4 text-center">Alle Turniere sind bereits zugewiesen.</p> : (
               <div className="space-y-2 max-h-[50vh] overflow-y-auto">
                 {unassigned.map(t => (
-                  <button key={t.id} onClick={() => { onAssign(t.id); onClose(); }}
-                    className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 hover:bg-blue-50 flex justify-between items-center min-h-[48px]">
-                    <span className="text-lg font-semibold">{formatDateCH(t.date)}</span>
-                    <span className="text-gray-500">{t.player_count} Spieler</span>
+                  <button key={t.id} onClick={() => { onAssign(t.id); onClose(); }} className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 hover:bg-blue-50 flex justify-between items-center min-h-[48px]">
+                    <span className="text-lg font-semibold">{formatDateCH(t.date)}</span><span className="text-gray-500">{t.player_count} Spieler</span>
                   </button>
                 ))}
               </div>
             )}
-            <div className="flex justify-end mt-4">
-              <button onClick={onClose} className="px-5 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px]">Schliessen</button>
-            </div>
+            <div className="flex justify-end mt-4"><button onClick={onClose} className="px-5 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px]">Schliessen</button></div>
           </div>
         </div>
       );
@@ -1651,6 +1655,40 @@ Nur das JSON, nichts anderes.` }
       const punkte = (parsed.punkte || []).map(s => { if (s === null || s === undefined) return null; const n = parseInt(s); if (isNaN(n) || n < 0 || n > 157) return null; return n; });
       while (punkte.length < 8) punkte.push(null);
       return { runde: parsed.runde != null ? parseInt(parsed.runde) : null, tisch: parsed.tisch != null ? parseInt(parsed.tisch) : null, schwarz: Array.isArray(parsed.schwarz) ? parsed.schwarz : [null, null], rot: Array.isArray(parsed.rot) ? parsed.rot : [null, null], punkte };
+    }
+
+    // Phase 6a: Enhanced Anmeldeblatt OCR
+    async function performAnmeldeOCR(imageBase64, mediaType, apiKey) {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001', max_tokens: 2000,
+          messages: [{ role: 'user', content: [
+            { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBase64 } },
+            { type: 'text', text: `Dieses Bild zeigt eine Anmeldeliste für ein Jass-Turnier. Die Liste hat Spalten: QR-Code, Nr., Name Vorname, und ein Kästchen "Ich nehme teil".
+
+Lese JEDE Zeile ab und erkenne ob das Kästchen angekreuzt ist (✕, ✓, Haken, oder ähnliche Markierung = true) oder leer (= false).
+
+Beachte:
+- Vorgedruckte Namen in grauer/heller Schrift UND handschriftlich eingetragene Namen in den leeren Zeilen
+- Bei handschriftlichen Einträgen: Lies den Namen so gut wie möglich
+- Ignoriere komplett leere Zeilen (kein Name, kein Kreuz)
+
+Antworte NUR mit diesem JSON (keine Erklärung, kein Markdown):
+{"spieler":[{"name":"Nachname Vorname","angekreuzt":true},{"name":"Meier Hans","angekreuzt":false},...]}
+
+Nur Zeilen mit einem Namen ODER einem Kreuz aufnehmen. Nur JSON.` }
+          ]}]
+        })
+      });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error?.message || `API-Fehler ${res.status}`); }
+      const data = await res.json();
+      const text = data.content[0].text.trim();
+      const match = text.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error('Keine Daten erkannt');
+      const parsed = JSON.parse(match[0]);
+      return { spieler: Array.isArray(parsed.spieler) ? parsed.spieler : [] };
     }
 
     function normalizeNameParts(name) {
@@ -1736,7 +1774,6 @@ Nur das JSON, nichts anderes.` }
         });
         return result;
       }, [tableSheets, playerId, allPlayers]);
-
       const total = Object.values(rounds).reduce((s, r) => s + (r.points || 0), 0);
 
       if (loading) return <Spinner text="Laden..." />;
@@ -2041,15 +2078,17 @@ Nur das JSON, nichts anderes.` }
     }
 
     // ════════════════════════════════════════════
-    //  ANMELDEBLATT SCAN
+    //  ANMELDEBLATT SCAN (Phase 6a — Enhanced)
     // ════════════════════════════════════════════
-    function AnmeldeblattScanDialog({ allPlayers, onClose, onApply }) {
+    function AnmeldeblattScanDialog({ allPlayers, onClose, onApply, onPlayersChanged }) {
       const toast = useToast();
       const fileRef = useRef(null);
       const [step, setStep] = useState('capture');
       const [error, setError] = useState(null);
       const [imageUrl, setImageUrl] = useState(null);
       const [matches, setMatches] = useState([]);
+      const [creatingPlayer, setCreatingPlayer] = useState(null); // { idx, name }
+      const [createName, setCreateName] = useState('');
 
       useEffect(() => { setTimeout(() => fileRef.current?.click(), 200); }, []);
 
@@ -2060,69 +2099,200 @@ Nur das JSON, nichts anderes.` }
           const { data: keyData } = await supabase.from('settings').select('value').eq('key', 'claude_api_key').single();
           if (!keyData?.value) throw new Error('Kein API-Key.');
           const { base64, mediaType } = await fileToBase64(file);
-          const res = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-api-key': keyData.value, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-            body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1000, messages: [{ role: 'user', content: [
-              { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
-              { type: 'text', text: `Dieses Bild zeigt ein handschriftliches Anmeldeblatt für ein Jass-Turnier. Lese alle Spielernamen ab. Antworte NUR mit JSON: {"namen":["Name 1","Name 2",...]} Falls unleserlich: "???". Nur JSON.` }
-            ]}] })
+          // Phase 6a: Use enhanced OCR with checkbox detection
+          const ocrResult = await performAnmeldeOCR(base64, mediaType, keyData.value);
+
+          const results = (ocrResult.spieler || []).map(entry => {
+            const m = matchPlayerName(entry.name, allPlayers);
+            return {
+              ocrName: entry.name,
+              angekreuzt: !!entry.angekreuzt,
+              match: m,
+              selectedId: m.player?.id || null,
+              included: !!entry.angekreuzt && !!m.player, // Only auto-include if checked AND matched
+              isNew: !m.player || m.confidence === 'none', // Flag for potential new player
+              newPlayerCreated: false
+            };
           });
-          if (!res.ok) throw new Error(`API-Fehler ${res.status}`);
-          const data = await res.json();
-          const match = data.content[0].text.trim().match(/\{[\s\S]*\}/);
-          if (!match) throw new Error('Keine Namen erkannt');
-          const parsed = JSON.parse(match[0]);
-          const results = (parsed.namen || []).map(name => { const m = matchPlayerName(name, allPlayers); return { ocrName: name, match: m, selectedId: m.player?.id || null, included: !!m.player }; });
           setMatches(results);
           setStep('confirm');
         } catch (e) { setError(e.message); setStep('capture'); }
       };
 
       const toggleInclude = (idx) => setMatches(prev => prev.map((m, i) => i === idx ? { ...m, included: !m.included } : m));
-      const setSelectedId = (idx, id) => setMatches(prev => prev.map((m, i) => i === idx ? { ...m, selectedId: id, included: !!id } : m));
-      const handleApply = () => { const ids = matches.filter(m => m.included && m.selectedId).map(m => m.selectedId); onApply(ids); toast(`${ids.length} Spieler übernommen`); };
+      const setSelectedId = (idx, id) => setMatches(prev => prev.map((m, i) => i === idx ? { ...m, selectedId: id, included: !!id, isNew: false } : m));
+
+      const startCreatePlayer = (idx) => {
+        setCreatingPlayer({ idx });
+        setCreateName(matches[idx].ocrName || '');
+      };
+
+      const confirmCreatePlayer = async () => {
+        if (!creatingPlayer || !createName.trim()) return;
+        const name = createName.trim();
+        // Insert new player
+        const { data, error: err } = await supabase.from('players').insert({ name, active: true }).select().single();
+        if (err) {
+          toast('Fehler: ' + (err.message.includes('unique') ? 'Name existiert bereits' : err.message), 'error');
+          return;
+        }
+        toast(`✅ ${name} als neuer Spieler angelegt`);
+        // Update match entry
+        setMatches(prev => prev.map((m, i) => i === creatingPlayer.idx ? {
+          ...m, selectedId: data.id, included: m.angekreuzt, isNew: false, newPlayerCreated: true,
+          match: { player: data, confidence: 'exact' }
+        } : m));
+        setCreatingPlayer(null);
+        setCreateName('');
+        // Notify parent to refresh player list
+        if (onPlayersChanged) onPlayersChanged();
+      };
+
+      const handleApply = () => {
+        const ids = matches.filter(m => m.included && m.selectedId).map(m => m.selectedId);
+        onApply(ids);
+        toast(`${ids.length} Spieler übernommen`);
+      };
+
       const confIcon = (c) => c === 'exact' ? '✅' : c === 'reversed' ? '🔄' : c === 'partial' ? '⚠️' : '❓';
+
+      const checkedCount = matches.filter(m => m.angekreuzt).length;
+      const matchedCheckedCount = matches.filter(m => m.angekreuzt && m.selectedId).length;
+      const newPlayerCount = matches.filter(m => m.angekreuzt && m.isNew && !m.newPlayerCreated).length;
       const selectedCount = matches.filter(m => m.included && m.selectedId).length;
 
       return (
         <div className="fixed inset-0 z-[9000] flex items-start justify-center modal-backdrop overflow-y-auto py-4" onClick={onClose}>
           <div className="bg-white rounded-xl shadow-2xl m-4 max-w-lg w-full fade-in" onClick={e => e.stopPropagation()}>
             <div className="px-5 py-4 border-b bg-gradient-to-r from-amber-500 to-orange-500 rounded-t-xl flex items-center justify-between">
-              <h3 className="text-xl font-bold text-white">📸 Anmeldeblatt scannen</h3>
+              <h3 className="text-xl font-bold text-white">📸 Anmeldeliste scannen</h3>
               <button onClick={onClose} className="text-3xl text-white opacity-70 hover:opacity-100 leading-none px-2">×</button>
             </div>
             <div className="p-5 space-y-4">
               <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={e => { if (e.target.files[0]) handleFile(e.target.files[0]); e.target.value = ''; }} />
-              {step === 'capture' && <div className="text-center space-y-4 py-4">{error && <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-red-700 font-semibold text-left">❌ {error}</div>}<button onClick={() => fileRef.current?.click()} className="w-full py-5 bg-amber-50 border-2 border-amber-300 rounded-xl text-amber-800 font-bold text-xl min-h-[64px]">📸 Anmeldeblatt fotografieren</button></div>}
-              {step === 'processing' && <div className="text-center py-8"><svg className="animate-spin h-10 w-10 text-amber-600 mx-auto mb-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg><p className="text-xl text-amber-700 font-bold">Namen werden erkannt...</p></div>}
+              {step === 'capture' && (
+                <div className="text-center space-y-4 py-4">
+                  {error && <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-red-700 font-semibold text-left">❌ {error}</div>}
+                  <button onClick={() => fileRef.current?.click()} className="w-full py-5 bg-amber-50 border-2 border-amber-300 rounded-xl text-amber-800 font-bold text-xl min-h-[64px]">📸 Anmeldeliste fotografieren</button>
+                  <p className="text-gray-500 text-base">Namen UND Kästchen werden automatisch erkannt. Auch handschriftliche Einträge in den leeren Zeilen.</p>
+                </div>
+              )}
+              {step === 'processing' && <div className="text-center py-8"><svg className="animate-spin h-10 w-10 text-amber-600 mx-auto mb-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg><p className="text-xl text-amber-700 font-bold">Anmeldeliste wird analysiert...</p></div>}
               {step === 'confirm' && (
                 <div className="space-y-4">
                   {imageUrl && <img src={imageUrl} alt="Scan" className="w-full max-h-28 object-contain rounded-lg border" />}
-                  <div className="text-sm text-gray-600 font-semibold">{matches.length} erkannt · {selectedCount} zugeordnet</div>
-                  <div className="space-y-1 max-h-[50vh] overflow-y-auto">
+
+                  {/* Summary */}
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div className="bg-gray-50 rounded-lg p-2 border border-gray-200">
+                      <div className="text-xl font-bold text-gray-700">{matches.length}</div>
+                      <div className="text-xs text-gray-500">Erkannt</div>
+                    </div>
+                    <div className="bg-green-50 rounded-lg p-2 border border-green-200">
+                      <div className="text-xl font-bold text-green-700">{checkedCount}</div>
+                      <div className="text-xs text-green-600">Angekreuzt</div>
+                    </div>
+                    <div className="bg-blue-50 rounded-lg p-2 border border-blue-200">
+                      <div className="text-xl font-bold text-blue-700">{selectedCount}</div>
+                      <div className="text-xs text-blue-600">Übernehmen</div>
+                    </div>
+                  </div>
+
+                  {newPlayerCount > 0 && (
+                    <div className="bg-purple-50 border border-purple-300 rounded-lg p-3 text-purple-800 text-base font-semibold">
+                      🆕 {newPlayerCount} neue{newPlayerCount === 1 ? 'r' : ''} Spieler erkannt — bitte unten anlegen
+                    </div>
+                  )}
+
+                  {selectedCount > 0 && selectedCount % 4 !== 0 && (
+                    <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-amber-800 text-sm font-semibold">
+                      ⚠️ {selectedCount} gewählt — brauche {4 - (selectedCount % 4)} mehr für teilbar durch 4
+                    </div>
+                  )}
+
+                  <div className="space-y-1 max-h-[45vh] overflow-y-auto">
                     {matches.map((m, idx) => (
-                      <div key={idx} className={`flex items-center gap-2 p-2 rounded-lg border ${m.included ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200 opacity-60'}`}>
-                        <button onClick={() => toggleInclude(idx)} className="text-xl w-8 flex-shrink-0">{m.included ? '☑' : '☐'}</button>
+                      <div key={idx} className={`flex items-center gap-2 p-2 rounded-lg border ${m.angekreuzt ? (m.included ? 'bg-green-50 border-green-300' : 'bg-amber-50 border-amber-200') : 'bg-gray-50 border-gray-200 opacity-60'}`}>
+                        {/* Checkbox status from scan */}
+                        <div className="flex-shrink-0 w-7 text-center text-lg">
+                          {m.angekreuzt ? '☑' : '☐'}
+                        </div>
+
+                        {/* Include toggle */}
+                        <button onClick={() => toggleInclude(idx)} className={`flex-shrink-0 text-xl w-8 ${m.included ? 'text-green-600' : 'text-gray-300'}`}>
+                          {m.included ? '✅' : '⬜'}
+                        </button>
+
                         <div className="flex-1 min-w-0">
                           <div className="text-sm text-gray-500 truncate">«{m.ocrName}»</div>
                           {m.match.confidence !== 'none' && m.selectedId ? (
-                            <div className="font-semibold text-green-800 flex items-center gap-1"><span className="text-sm">{confIcon(m.match.confidence)}</span>{allPlayers.find(p => p.id === m.selectedId)?.name}</div>
+                            <div className="font-semibold text-green-800 flex items-center gap-1">
+                              <span className="text-sm">{confIcon(m.match.confidence)}</span>
+                              {allPlayers.find(p => p.id === m.selectedId)?.name || m.match.player?.name}
+                              {m.newPlayerCreated && <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-bold ml-1">NEU</span>}
+                            </div>
+                          ) : m.isNew && m.angekreuzt ? (
+                            <div className="flex items-center gap-2 mt-1">
+                              <button onClick={() => startCreatePlayer(idx)}
+                                className="px-3 py-1.5 bg-purple-100 text-purple-700 rounded-lg text-sm font-bold min-h-[36px] hover:bg-purple-200">
+                                🆕 Spieler anlegen
+                              </button>
+                              <select value={m.selectedId || ''} onChange={e => setSelectedId(idx, e.target.value || null)}
+                                className="flex-1 px-2 py-1 border rounded text-sm font-semibold min-w-0">
+                                <option value="">— Zuordnen —</option>
+                                {allPlayers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                              </select>
+                            </div>
                           ) : (
-                            <select value={m.selectedId || ''} onChange={e => setSelectedId(idx, e.target.value || null)} className="w-full px-2 py-1 border rounded text-sm font-semibold mt-1"><option value="">— Zuordnen —</option>{allPlayers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+                            <select value={m.selectedId || ''} onChange={e => setSelectedId(idx, e.target.value || null)}
+                              className="w-full px-2 py-1 border rounded text-sm font-semibold mt-1">
+                              <option value="">— Zuordnen —</option>
+                              {allPlayers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            </select>
                           )}
                         </div>
                       </div>
                     ))}
                   </div>
+
                   <div className="flex gap-3 pt-2">
-                    <button onClick={onClose} className="flex-1 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px]">Abbrechen</button>
-                    <button onClick={handleApply} disabled={selectedCount === 0} className={`flex-1 py-3 rounded-lg font-bold text-lg min-h-[48px] text-white ${selectedCount > 0 ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-300'}`}>✅ {selectedCount} übernehmen</button>
+                    <button onClick={() => { setStep('capture'); setMatches([]); }} className="flex-1 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px]">🔄 Neu scannen</button>
+                    <button onClick={handleApply} disabled={selectedCount === 0}
+                      className={`flex-1 py-3 rounded-lg font-bold text-lg min-h-[48px] text-white ${selectedCount > 0 ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-300'}`}>
+                      ✅ {selectedCount} übernehmen
+                    </button>
                   </div>
                 </div>
               )}
             </div>
           </div>
+
+          {/* New Player Creation Modal */}
+          {creatingPlayer !== null && (
+            <div className="fixed inset-0 z-[9500] flex items-center justify-center modal-backdrop" onClick={() => setCreatingPlayer(null)}>
+              <div className="bg-white rounded-xl shadow-2xl p-6 m-4 max-w-sm w-full fade-in" onClick={e => e.stopPropagation()}>
+                <h3 className="text-xl font-bold text-gray-800 mb-4">🆕 Neuen Spieler anlegen</h3>
+                <div className="space-y-3">
+                  <div className="bg-gray-100 rounded-lg p-3 text-sm text-gray-500">
+                    OCR hat gelesen: <strong>«{matches[creatingPlayer.idx]?.ocrName}»</strong>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-600 mb-1">Name (bitte kontrollieren)</label>
+                    <input type="text" value={createName} onChange={e => setCreateName(e.target.value)}
+                      autoFocus
+                      className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg text-lg min-h-[48px] focus:border-purple-500 focus:outline-none" />
+                  </div>
+                </div>
+                <div className="flex gap-3 justify-end mt-6">
+                  <button onClick={() => setCreatingPlayer(null)} className="px-5 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold text-lg min-h-[48px]">Abbrechen</button>
+                  <button onClick={confirmCreatePlayer} disabled={!createName.trim()}
+                    className="px-5 py-3 bg-purple-600 text-white rounded-lg font-bold text-lg min-h-[48px] hover:bg-purple-700">
+                    ✅ Anlegen
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       );
     }
@@ -2135,9 +2305,7 @@ Nur das JSON, nichts anderes.` }
       const sheets = tableSheets.filter(s => s.round_number === roundNumber).sort((a, b) => a.table_number - b.table_number);
       const allTables = [];
       for (let t = 1; t <= tournament.table_count; t++) allTables.push(sheets.find(s => s.table_number === t) || { table_number: t, empty: true });
-
       const S = { page: { padding: '24px 28px', maxWidth: 580, margin: '0 auto', fontFamily: "'Source Sans 3', Arial, sans-serif", color: '#000' }, border: '1.5px solid #000', cell: { border: '1.5px solid #000', padding: '8px 10px', textAlign: 'center', fontSize: 16, height: 38, verticalAlign: 'middle' }, cellWide: { border: '1.5px solid #000', padding: '8px 10px', textAlign: 'center', fontSize: 16, height: 38, verticalAlign: 'middle', width: '42%' }, cellSmall: { border: '1.5px solid #000', padding: '4px', textAlign: 'center', fontSize: 14, height: 38, verticalAlign: 'middle', width: 36 }, header: { fontWeight: 700, fontSize: 15, padding: '6px 8px', textAlign: 'center', borderBottom: '1.5px solid #000' } };
-
       const renderSheet = (sheet) => {
         const qrUrl = `${BASE_URL}?t=${tournament.id}&r=${roundNumber}&tbl=${sheet.table_number}`;
         const s1 = sheet.empty ? '' : playerName(sheet.schwarz_player1_id);
@@ -2160,7 +2328,6 @@ Nur das JSON, nichts anderes.` }
           </div>
         );
       };
-
       return (<PrintPortal><div className="print-overlay-screen print-overlay"><PrintControls title={`Tischzettel Runde ${roundNumber}`} onClose={onClose} /><div className="print-only" style={{ display: 'block' }}>{allTables.map((s, i) => <div key={s.table_number} className={i < allTables.length - 1 ? 'print-page-break' : ''}>{renderSheet(s)}</div>)}</div><div className="no-print" style={{ padding: '20px 0' }}>{allTables.map(s => <div key={s.table_number} style={{ maxWidth: 580, margin: '0 auto 24px', background: 'white', borderRadius: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.1)', overflow: 'hidden' }}>{renderSheet(s)}</div>)}</div></div></PrintPortal>);
     }
 
@@ -2186,7 +2353,6 @@ Nur das JSON, nichts anderes.` }
         });
         return Object.entries(assignments).map(([id, data]) => ({ id, ...data })).sort((a, b) => a.name.localeCompare(b.name));
       }, [tableSheets, tournamentPlayerIds, allPlayers]);
-
       const B = '1.5px solid #000';
       const renderCard = (player) => {
         const qrUrl = `${BASE_URL}?t=${tournament.id}&p=${player.id}`;
@@ -2209,12 +2375,11 @@ Nur das JSON, nichts anderes.` }
           </div>
         );
       };
-
       return (<PrintPortal><div className="print-overlay-screen print-overlay"><PrintControls title={`Spielerzettel (${playerAssignments.length})`} onClose={onClose} /><div className="print-only" style={{ display: 'block' }}>{playerAssignments.map((p, i) => <div key={p.id} className={i < playerAssignments.length - 1 ? 'print-page-break' : ''}>{renderCard(p)}</div>)}</div><div className="no-print" style={{ padding: '20px 0' }}>{playerAssignments.map(p => <div key={p.id} style={{ maxWidth: 520, margin: '0 auto 24px', background: 'white', borderRadius: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.1)', overflow: 'hidden' }}>{renderCard(p)}</div>)}</div></div></PrintPortal>);
     }
 
     // ════════════════════════════════════════════
-    //  PRINT: RANGLISTE (single tournament)
+    //  PRINT: RANGLISTE
     // ════════════════════════════════════════════
     function PrintRangliste({ tournament, rankings, onClose }) {
       const dateStr = formatDateLong(tournament.date);
@@ -2275,41 +2440,23 @@ Nur das JSON, nichts anderes.` }
     }
 
     // ════════════════════════════════════════════
-    //  PRINT: ANMELDELISTE (registration sheet)
+    //  PRINT: ANMELDELISTE
     // ════════════════════════════════════════════
     function PrintAnmeldeliste({ date, allPlayers, onClose }) {
       const ROWS_PER_PAGE = 20;
-      const BLANK_ROWS = 28; // ~2 extra pages for walk-ins/new players
-
-      const sortedPlayers = useMemo(() => {
-        return [...allPlayers].sort((a, b) => a.name.localeCompare(b.name, 'de'));
-      }, [allPlayers]);
-
+      const BLANK_ROWS = 28;
+      const sortedPlayers = useMemo(() => [...allPlayers].sort((a, b) => a.name.localeCompare(b.name, 'de')), [allPlayers]);
       const allRows = useMemo(() => {
         const rows = sortedPlayers.map(p => ({ type: 'player', id: p.id, name: p.name }));
         for (let i = 0; i < BLANK_ROWS; i++) rows.push({ type: 'blank', id: `blank_${i}`, name: '' });
         return rows;
       }, [sortedPlayers]);
-
-      const pages = useMemo(() => {
-        const result = [];
-        for (let i = 0; i < allRows.length; i += ROWS_PER_PAGE) {
-          result.push(allRows.slice(i, i + ROWS_PER_PAGE));
-        }
-        return result;
-      }, [allRows]);
-
+      const pages = useMemo(() => { const result = []; for (let i = 0; i < allRows.length; i += ROWS_PER_PAGE) result.push(allRows.slice(i, i + ROWS_PER_PAGE)); return result; }, [allRows]);
       const dateStr = formatDateLong(date);
       const B = '1.5px solid #000';
-
-      // Small filled square for the checkbox
-      const checkboxSquare = (
-        <div style={{ width: 18, height: 18, border: '2px solid #000', margin: '0 auto', borderRadius: 2 }}></div>
-      );
-
+      const checkboxSquare = (<div style={{ width: 18, height: 18, border: '2px solid #000', margin: '0 auto', borderRadius: 2 }}></div>);
       const renderPage = (pageRows, pageIndex) => (
         <div style={{ padding: '28px 32px', maxWidth: 700, margin: '0 auto', fontFamily: "'Source Sans 3', Arial, sans-serif", color: '#000' }}>
-          {/* Header */}
           {pageIndex === 0 ? (
             <div style={{ textAlign: 'center', marginBottom: 12 }}>
               <h1 style={{ fontSize: 28, fontWeight: 800, margin: '0 0 4px' }}>Anmeldeliste</h1>
@@ -2328,16 +2475,13 @@ Nur das JSON, nichts anderes.` }
               <div style={{ fontSize: 13, color: '#999' }}>Seite {pageIndex + 1} / {pages.length}</div>
             </div>
           )}
-
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th style={{ width: 32, padding: '4px', fontSize: 10, fontWeight: 400, color: '#999', textAlign: 'center', borderBottom: '2px solid #000' }}></th>
-                <th style={{ width: 40, padding: '4px', fontSize: 10, fontWeight: 400, color: '#999', textAlign: 'center', borderBottom: '2px solid #000' }}>Nr.</th>
-                <th style={{ padding: '4px 10px', fontSize: 13, fontWeight: 700, textAlign: 'left', borderBottom: '2px solid #000' }}>Name Vorname</th>
-                <th style={{ width: 60, padding: '4px 2px', fontSize: 9, fontWeight: 600, color: '#666', textAlign: 'center', borderBottom: '2px solid #000', lineHeight: '1.1' }}>Ich nehme<br/>teil</th>
-              </tr>
-            </thead>
+            <thead><tr>
+              <th style={{ width: 32, padding: '4px', fontSize: 10, fontWeight: 400, color: '#999', textAlign: 'center', borderBottom: '2px solid #000' }}></th>
+              <th style={{ width: 40, padding: '4px', fontSize: 10, fontWeight: 400, color: '#999', textAlign: 'center', borderBottom: '2px solid #000' }}>Nr.</th>
+              <th style={{ padding: '4px 10px', fontSize: 13, fontWeight: 700, textAlign: 'left', borderBottom: '2px solid #000' }}>Name Vorname</th>
+              <th style={{ width: 60, padding: '4px 2px', fontSize: 9, fontWeight: 600, color: '#666', textAlign: 'center', borderBottom: '2px solid #000', lineHeight: '1.1' }}>Ich nehme<br/>teil</th>
+            </tr></thead>
             <tbody>
               {pageRows.map((row, idx) => {
                 const globalIdx = pageIndex * ROWS_PER_PAGE + idx + 1;
@@ -2345,54 +2489,23 @@ Nur das JSON, nichts anderes.` }
                 const qrSrc = qrText ? generateQRDataURL(qrText, 1) : null;
                 return (
                   <tr key={row.id} style={{ borderBottom: B }}>
-                    <td style={{ width: 32, padding: '3px', textAlign: 'center', verticalAlign: 'middle', borderRight: B, borderLeft: B }}>
-                      {qrSrc ? <img src={qrSrc} alt="" style={{ width: 28, height: 28, imageRendering: 'pixelated', display: 'block', margin: '0 auto' }} /> : null}
-                    </td>
-                    <td style={{ width: 40, padding: '4px', textAlign: 'center', verticalAlign: 'middle', fontSize: 14, fontWeight: 700, color: '#999', borderRight: B }}>
-                      {globalIdx}
-                    </td>
-                    <td style={{ padding: '6px 12px', height: 46, verticalAlign: 'middle', fontSize: 16, borderRight: B }}>
-                      {row.type === 'player' ? (
-                        <span style={{ color: '#bbb', fontSize: 14, letterSpacing: '0.5px' }}>{row.name}</span>
-                      ) : null}
-                    </td>
-                    <td style={{ width: 60, padding: '4px', textAlign: 'center', verticalAlign: 'middle', borderRight: B }}>
-                      {checkboxSquare}
-                    </td>
+                    <td style={{ width: 32, padding: '3px', textAlign: 'center', verticalAlign: 'middle', borderRight: B, borderLeft: B }}>{qrSrc ? <img src={qrSrc} alt="" style={{ width: 28, height: 28, imageRendering: 'pixelated', display: 'block', margin: '0 auto' }} /> : null}</td>
+                    <td style={{ width: 40, padding: '4px', textAlign: 'center', verticalAlign: 'middle', fontSize: 14, fontWeight: 700, color: '#999', borderRight: B }}>{globalIdx}</td>
+                    <td style={{ padding: '6px 12px', height: 46, verticalAlign: 'middle', fontSize: 16, borderRight: B }}>{row.type === 'player' ? <span style={{ color: '#bbb', fontSize: 14, letterSpacing: '0.5px' }}>{row.name}</span> : null}</td>
+                    <td style={{ width: 60, padding: '4px', textAlign: 'center', verticalAlign: 'middle', borderRight: B }}>{checkboxSquare}</td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
-
-          {pageIndex === pages.length - 1 && (
-            <div style={{ marginTop: 16, fontSize: 11, color: '#999', textAlign: 'center' }}>
-              Jass-Turnier-Manager · Leere Zeilen für Nachmeldungen — bitte Name Vorname eintragen und Kästchen ankreuzen
-            </div>
-          )}
+          {pageIndex === pages.length - 1 && <div style={{ marginTop: 16, fontSize: 11, color: '#999', textAlign: 'center' }}>Jass-Turnier-Manager · Leere Zeilen für Nachmeldungen — bitte Name Vorname eintragen und Kästchen ankreuzen</div>}
         </div>
       );
-
       return (
-        <PrintPortal>
-          <div className="print-overlay-screen print-overlay">
-            <PrintControls title={`Anmeldeliste — ${dateStr}`} onClose={onClose} />
-            <div className="print-only" style={{ display: 'block' }}>
-              {pages.map((pageRows, i) => (
-                <div key={i} className={i < pages.length - 1 ? 'print-page-break' : ''}>
-                  {renderPage(pageRows, i)}
-                </div>
-              ))}
-            </div>
-            <div className="no-print" style={{ padding: '20px 0' }}>
-              {pages.map((pageRows, i) => (
-                <div key={i} style={{ maxWidth: 700, margin: '0 auto 24px', background: 'white', borderRadius: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
-                  {renderPage(pageRows, i)}
-                </div>
-              ))}
-            </div>
-          </div>
-        </PrintPortal>
+        <PrintPortal><div className="print-overlay-screen print-overlay"><PrintControls title={`Anmeldeliste — ${dateStr}`} onClose={onClose} />
+          <div className="print-only" style={{ display: 'block' }}>{pages.map((pageRows, i) => <div key={i} className={i < pages.length - 1 ? 'print-page-break' : ''}>{renderPage(pageRows, i)}</div>)}</div>
+          <div className="no-print" style={{ padding: '20px 0' }}>{pages.map((pageRows, i) => <div key={i} style={{ maxWidth: 700, margin: '0 auto 24px', background: 'white', borderRadius: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.1)', overflow: 'hidden' }}>{renderPage(pageRows, i)}</div>)}</div>
+        </div></PrintPortal>
       );
     }
 
@@ -2443,11 +2556,11 @@ Nur das JSON, nichts anderes.` }
             </header>
             <main className="max-w-4xl mx-auto px-4 py-6">
               {tab === 'verwaltung' && <VerwaltungTab />}
-              {tab === 'turnier' && <TurnierTab qrParams={qrParams?.type === 'table' ? qrParams : null} onQrHandled={() => setQrParams(null)} />}
+              {tab === 'turnier' && <TurnierTab qrParams={qrParams?.type === 'table' ? qrParams : null} onQrHandled={() => setQrParams(null)} onSwitchTab={setTab} />}
               {tab === 'rangliste' && <RanglisteTab />}
               {tab === 'saison' && <SaisonTab />}
             </main>
-            <footer className="text-center py-6 text-sm text-gray-400">Jass-Turnier-Manager v5.0 · Phase 5</footer>
+            <footer className="text-center py-6 text-sm text-gray-400">Jass-Turnier-Manager v6.0 · Phase 6</footer>
           </div>
         </ToastProvider>
       );
