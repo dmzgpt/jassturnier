@@ -1782,14 +1782,39 @@ Nur Zeilen mit einem Namen ODER einem Kreuz aufnehmen. Nur JSON.` }
       const ocrParts = normalizeNameParts(ocrName);
       if (ocrParts.length === 0) return { player: null, confidence: 'none' };
       let bestMatch = null, bestScore = 0, bestConfidence = 'none';
+
+      // Helper: check if two name parts are similar enough
+      // Requires prefix to be at least 65% of longer word length (prevents "Hans" → "Hansueli")
+      const partsMatch = (a, b) => {
+        if (a === b) return true;
+        const shorter = a.length <= b.length ? a : b;
+        const longer = a.length > b.length ? a : b;
+        if (shorter.length < 3) return false;
+        if (!longer.startsWith(shorter)) return false;
+        return shorter.length / longer.length >= 0.65;
+      };
+
       for (const p of playersList) {
         const dbParts = normalizeNameParts(p.name);
+        // Exact match
         if (ocrParts.join(' ') === dbParts.join(' ')) return { player: p, confidence: 'exact' };
+        // Reversed name order (Vorname Nachname ↔ Nachname Vorname)
         if (ocrParts.length >= 2 && dbParts.length >= 2 && [...ocrParts].reverse().join(' ') === dbParts.join(' ')) return { player: p, confidence: 'reversed' };
+
+        // Partial matching: count how many OCR parts match a DB part
         let matchCount = 0;
-        for (const op of ocrParts) { for (const dp of dbParts) { if (op === dp || (op.length >= 3 && dp.startsWith(op)) || (dp.length >= 3 && op.startsWith(dp))) { matchCount++; break; } } }
+        const usedDb = new Set();
+        for (const op of ocrParts) {
+          for (let di = 0; di < dbParts.length; di++) {
+            if (usedDb.has(di)) continue;
+            if (partsMatch(op, dbParts[di])) { matchCount++; usedDb.add(di); break; }
+          }
+        }
         const score = matchCount / Math.max(ocrParts.length, dbParts.length);
-        if (score > bestScore) { bestScore = score; bestMatch = p; bestConfidence = score >= 0.5 ? 'partial' : 'none'; }
+        // Strict threshold: for 2-part names, BOTH parts must match (score > 0.5)
+        // This prevents "Moser Kathrin" → "Moser Gertrud" (score=0.5, rejected)
+        // But allows "Andereg Thomas" → "Anderegg Thomas" (score=1.0, accepted)
+        if (score > bestScore) { bestScore = score; bestMatch = p; bestConfidence = score > 0.5 ? 'partial' : 'none'; }
       }
       return { player: bestConfidence !== 'none' ? bestMatch : null, confidence: bestConfidence };
     }
@@ -2641,7 +2666,7 @@ Nur Zeilen mit einem Namen ODER einem Kreuz aufnehmen. Nur JSON.` }
               {tab === 'rangliste' && <RanglisteTab />}
               {tab === 'saison' && <SaisonTab />}
             </main>
-            <footer className="text-center py-6 text-sm text-gray-400">Jass-Turnier-Manager v6.1 · Phase 6</footer>
+            <footer className="text-center py-6 text-sm text-gray-400">Jass-Turnier-Manager v6.2 · Phase 6</footer>
             <OfflineWarning />
           </div>
         </ToastProvider>
